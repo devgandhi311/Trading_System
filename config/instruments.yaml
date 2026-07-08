@@ -1,0 +1,41 @@
+instruments:
+  - symbol: NIFTY
+    exchange: NSE
+    segment: INDEX
+    instrument_type: INDEX
+    enabled: true
+    lot_size: 75
+    tick_size: 0.05
+    token: NIFTY
+    option_underlying: NIFTY
+    strike_step: 50
+    supported_option_types:
+      - CE
+      - PE
+  - symbol: BANKNIFTY
+    exchange: NSE
+    segment: INDEX
+    instrument_type: INDEX
+    enabled: true
+    lot_size: 35
+    tick_size: 0.05
+    token: BANKNIFTY
+    option_underlying: BANKNIFTY
+    strike_step: 100
+    supported_option_types:
+      - CE
+      - PE
+  - symbol: FINNIFTY
+    exchange: NSE
+    segment: INDEX
+    instrument_type: INDEX
+    enabled: true
+    lot_size: 65
+    tick_size: 0.05
+  - symbol: MIDCPNIFTY
+    exchange: NSE
+    segment: INDEX
+    instrument_type: INDEX
+    enabled: true
+    lot_size: 140
+    tick_size: 0.05

@@ -1,0 +1,20 @@
+mode: PAPER
+live_trading_enabled: false
+timezone: Asia/Kolkata
+market_start_time: "09:15"
+market_end_time: "15:30"
+no_new_trade_after_time: "15:00"
+force_squareoff_time: "15:20"
+log_level: INFO
+
+data_paths:
+  raw: data/raw
+  processed: data/processed
+  features: data/features
+  market_cache: data/market_cache
+  models: data/model_data
+
+report_paths:
+  daily: reports/daily
+  trades: reports/trades
+  risk: reports/risk

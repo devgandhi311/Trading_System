@@ -1,0 +1,68 @@
+enabled: true
+primary_provider: finnhub
+backup_providers:
+  - alpha_vantage
+  - marketaux
+
+fetch_interval_minutes: 15
+cache_enabled: true
+cache_expiry_minutes: 60
+
+symbols:
+  - NIFTY
+  - BANKNIFTY
+  - NSE
+  - INDIA
+  - RBI
+  - INFLATION
+  - CRUDE
+  - USDINR
+  - FED
+  - FOMC
+
+event_risk_keywords:
+  - RBI policy
+  - interest rate
+  - inflation
+  - CPI
+  - GDP
+  - election
+  - war
+  - crude oil
+  - rupee
+  - USDINR
+  - Fed
+  - FOMC
+  - budget
+  - tax
+  - SEBI
+  - NSE outage
+  - market halt
+  - geopolitical
+  - banking crisis
+
+high_impact_sources:
+  - Reuters
+  - Bloomberg
+  - CNBC
+  - Economic Times
+  - Moneycontrol
+  - Business Standard
+  - RBI
+  - NSE
+  - SEBI
+
+sentiment_thresholds:
+  very_negative: -0.6
+  negative: -0.25
+  neutral_low: -0.25
+  neutral_high: 0.25
+  positive: 0.25
+  very_positive: 0.6
+
+risk_rules:
+  block_new_trades_on_high_event_risk: true
+  reduce_position_size_on_medium_event_risk: true
+  squareoff_on_extreme_event_risk: false
+  minimum_minutes_after_high_impact_news: 30
+  fail_safe_block_on_news_api_error: false

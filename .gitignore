@@ -1,0 +1,36 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+
+# Runtime logs and generated reports/data
+logs/
+data/live/
+data/news_cache/
+data/processed/
+data/features/
+data/model_data/
+reports/backtests/
+reports/model_reports/
+reports/risk_reports/
+*.log
+
+# Local notebooks and OS/editor files
+.ipynb_checkpoints/
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

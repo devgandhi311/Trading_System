@@ -1,0 +1,21 @@
+allowed_strategies:
+  - momentum_breakout
+  - mean_reversion
+  - volatility_scalping
+  - iron_condor
+  - credit_spread
+  - debit_spread
+  - long_gamma
+default_expiry_type: WEEKLY
+min_confidence_score: 0.65
+allowed_regimes:
+  - trending
+  - range_bound
+  - high_volatility
+  - low_volatility
+lot_size:
+  NIFTY: 75
+  BANKNIFTY: 35
+  FINNIFTY: 65
+  MIDCPNIFTY: 140
+max_lots_per_trade: 2

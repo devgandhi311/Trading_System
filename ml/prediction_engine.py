@@ -1,0 +1,391 @@
+"""Prediction engine that combines features, regime, and option-chain context."""
+
+from __future__ import annotations
+
+from datetime import datetime
+import logging
+from typing import Any, Mapping
+
+from ml.explainability import ExplainabilityEngine
+from ml.model_registry import ModelRegistry
+from models import OptionChainSnapshot, PredictionResult, RegimeResult, RegimeType, StrategyType
+from utils.config_loader import ConfigLoader
+from utils.math_utils import clamp
+from utils.time_utils import now_ist
+
+LOGGER = logging.getLogger(__name__)
+
+
+class PredictionEngine:
+    """Create advisory predictions without placing trades."""
+
+    def __init__(
+        self,
+        *,
+        config_loader: ConfigLoader | None = None,
+        model_registry: ModelRegistry | None = None,
+        explainability_engine: ExplainabilityEngine | None = None,
+        models: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Create an engine with optional preloaded models."""
+
+        self.config_loader = config_loader or ConfigLoader()
+        self.config = self.config_loader.load()
+        self.model_registry = model_registry or ModelRegistry(config_loader=self.config_loader)
+        self.explainability = explainability_engine or ExplainabilityEngine()
+        self.models = dict(models or {})
+
+    def predict(
+        self,
+        latest_features: Mapping[str, Any],
+        current_regime: RegimeResult | RegimeType | str,
+        option_chain_snapshot: OptionChainSnapshot | None = None,
+        *,
+        underlying: str | None = None,
+        timestamp: datetime | None = None,
+        news_sentiment: Any | None = None,
+        news_event_risk: Any | None = None,
+    ) -> PredictionResult:
+        """Return a PredictionResult from latest features, regime, and option-chain context."""
+
+        regime = self._normalize_regime(current_regime)
+        regime_name = self._regime_name(current_regime, regime)
+        underlying_symbol = underlying or self._underlying(latest_features, current_regime, option_chain_snapshot)
+        spot = self._spot_price(latest_features, option_chain_snapshot)
+
+        bullish_probability, bearish_probability, sideways_probability = self._direction_probabilities(latest_features)
+        expected_move_percent = self._expected_move_percent(latest_features, option_chain_snapshot)
+        expected_range_low = spot * (1.0 - expected_move_percent / 100.0) if spot else None
+        expected_range_high = spot * (1.0 + expected_move_percent / 100.0) if spot else None
+        volatility_state = self._volatility_state(latest_features)
+        breakout_failure_probability = self._breakout_failure_probability(latest_features)
+        confidence = self._confidence(
+            bullish_probability,
+            bearish_probability,
+            sideways_probability,
+            latest_features,
+            current_regime,
+        )
+        news_score = _as_float(getattr(news_sentiment, "sentiment_score", None))
+        if news_score is None:
+            news_score = _as_float(latest_features.get("news_sentiment_score"))
+        if news_score is not None:
+            confidence = clamp(confidence + news_score * 0.05, 0.0, 1.0)
+        if getattr(news_event_risk, "event_risk_level", "").upper() in {"HIGH", "EXTREME"}:
+            confidence = clamp(confidence - 0.2, 0.0, 1.0)
+        recommended_strategy = self._recommended_strategy(
+            latest_features=latest_features,
+            regime_name=regime_name,
+            bullish_probability=bullish_probability,
+            bearish_probability=bearish_probability,
+            sideways_probability=sideways_probability,
+            expected_move_percent=expected_move_percent,
+            volatility_state=volatility_state,
+            confidence=confidence,
+        )
+        trade_allowed = self._trade_allowed(current_regime, confidence, recommended_strategy)
+        reason = self._reason(
+            trade_allowed=trade_allowed,
+            confidence=confidence,
+            regime_name=regime_name,
+            recommended_strategy=recommended_strategy,
+        )
+        predicted_direction = self._predicted_direction(
+            bullish_probability,
+            bearish_probability,
+            sideways_probability,
+        )
+        iv_percentile = _as_float(latest_features.get("iv_percentile"))
+        explanation = self.explainability.build(
+            latest_features,
+            confidence=confidence,
+            bullish_probability=bullish_probability,
+            bearish_probability=bearish_probability,
+            sideways_probability=sideways_probability,
+            breakout_failure_probability=breakout_failure_probability,
+            trade_allowed=trade_allowed,
+            strategy_type=recommended_strategy.value if recommended_strategy else None,
+            regime_name=regime_name,
+            expected_move_percent=expected_move_percent,
+            iv_percentile=iv_percentile,
+        )
+
+        LOGGER.info(
+            "Prediction generated",
+            extra={
+                "underlying": underlying_symbol,
+                "regime": regime_name,
+                "confidence": confidence,
+                "trade_allowed": trade_allowed,
+            },
+        )
+        return PredictionResult(
+            symbol=underlying_symbol,
+            underlying=underlying_symbol,
+            timestamp=timestamp or now_ist(),
+            predicted_direction=predicted_direction,
+            confidence=confidence,
+            confidence_score=confidence,
+            horizon_minutes=375,
+            regime=regime,
+            expected_return_percent=self._expected_return_percent(
+                bullish_probability,
+                bearish_probability,
+                expected_move_percent,
+            ),
+            expected_volatility_percent=expected_move_percent,
+            bullish_probability=bullish_probability,
+            bearish_probability=bearish_probability,
+            sideways_probability=sideways_probability,
+            expected_move_percent=expected_move_percent,
+            expected_range_low=expected_range_low,
+            expected_range_high=expected_range_high,
+            volatility_state=volatility_state,
+            breakout_failure_probability=breakout_failure_probability,
+            recommended_strategy_type=recommended_strategy.value if recommended_strategy else None,
+            trade_allowed=trade_allowed,
+            reason=reason,
+            metadata={
+                "explainability": explanation.as_dict(),
+                "option_chain_expiry": str(option_chain_snapshot.expiry) if option_chain_snapshot else None,
+                "source": "model_or_feature_heuristic",
+                "news_sentiment_score": news_score,
+                "event_risk_level": getattr(news_event_risk, "event_risk_level", None),
+                "event_risk_score": getattr(news_event_risk, "event_risk_score", None),
+            },
+        )
+
+    def _direction_probabilities(self, features: Mapping[str, Any]) -> tuple[float, float, float]:
+        model = self.models.get("direction")
+        if model is not None:
+            probabilities = _predict_probabilities(model, features)
+            if probabilities:
+                return _normalize_three(probabilities)
+
+        return_value = _first_float(features, "daily_return", "log_return", "intraday_return", default=0.0)
+        trend_score = _first_float(features, "trend_score", "rolling_mean_return", default=return_value)
+        volatility = abs(_first_float(features, "rolling_volatility", "realized_volatility", default=0.01))
+        directional_edge = clamp((trend_score * 35.0) + (return_value * 20.0), -0.35, 0.35)
+        sideways = clamp(0.34 + max(0.0, 0.04 - volatility) * 4.0, 0.15, 0.65)
+        remaining = 1.0 - sideways
+        bullish = remaining * (0.5 + directional_edge)
+        bearish = remaining - bullish
+        return _normalize_three((bullish, bearish, sideways))
+
+    def _expected_move_percent(
+        self,
+        features: Mapping[str, Any],
+        option_chain_snapshot: OptionChainSnapshot | None,
+    ) -> float:
+        model = self.models.get("volatility")
+        if model is not None:
+            prediction = _predict_scalar(model, features)
+            if prediction is not None:
+                return clamp(abs(prediction), 0.05, 20.0)
+        explicit = _first_float(
+            features,
+            "expected_move_from_iv",
+            "expected_move_from_realized_volatility",
+            "expected_range",
+            default=0.0,
+        )
+        if explicit > 0:
+            return clamp(explicit, 0.05, 20.0)
+        iv_values = [
+            contract.implied_volatility
+            for contract in (option_chain_snapshot.contracts if option_chain_snapshot else ())
+            if contract.implied_volatility is not None
+        ]
+        if iv_values:
+            return clamp(sum(iv_values) / len(iv_values) / 16.0, 0.05, 20.0)
+        realized = _first_float(features, "realized_volatility", "rolling_volatility", default=0.01)
+        return clamp(abs(realized) * 100.0, 0.05, 20.0)
+
+    def _breakout_failure_probability(self, features: Mapping[str, Any]) -> float:
+        model = self.models.get("signal")
+        if model is not None:
+            probabilities = _predict_probabilities(model, features)
+            if probabilities:
+                return clamp(probabilities[-1], 0.0, 1.0)
+        failed_breakout = _first_float(features, "failed_breakout_detected", "failed_breakout_strength", default=0.0)
+        range_compression = _first_float(features, "range_compression", default=0.0)
+        liquidity_sweep = max(
+            _first_float(features, "liquidity_sweep_above_previous_high_strength", default=0.0),
+            _first_float(features, "liquidity_sweep_below_previous_low_strength", default=0.0),
+        )
+        return clamp(0.15 + failed_breakout * 0.55 + range_compression * 0.15 + liquidity_sweep * 0.15, 0.0, 1.0)
+
+    def _volatility_state(self, features: Mapping[str, Any]) -> str:
+        percentile = _first_float(features, "volatility_percentile", "iv_percentile", default=50.0)
+        if percentile >= 70.0:
+            return "expanding"
+        if percentile <= 30.0:
+            return "contracting"
+        return "normal"
+
+    def _confidence(
+        self,
+        bullish_probability: float,
+        bearish_probability: float,
+        sideways_probability: float,
+        features: Mapping[str, Any],
+        current_regime: RegimeResult | RegimeType | str,
+    ) -> float:
+        probabilities = sorted((bullish_probability, bearish_probability, sideways_probability), reverse=True)
+        separation = probabilities[0] - probabilities[1]
+        regime_confidence = _as_float(getattr(current_regime, "confidence_score", None))
+        if regime_confidence is None:
+            regime_confidence = _as_float(getattr(current_regime, "confidence", None))
+        liquidity = _first_float(features, "liquidity_score", default=0.6)
+        return clamp(0.35 + separation * 0.8 + (regime_confidence or 0.5) * 0.2 + liquidity * 0.1, 0.0, 1.0)
+
+    def _recommended_strategy(
+        self,
+        *,
+        latest_features: Mapping[str, Any],
+        regime_name: str,
+        bullish_probability: float,
+        bearish_probability: float,
+        sideways_probability: float,
+        expected_move_percent: float,
+        volatility_state: str,
+        confidence: float,
+    ) -> StrategyType | None:
+        if confidence < self.config.strategy.min_confidence_score:
+            return None
+        allowed = {item for item in self.config.strategy.allowed_strategies}
+        if sideways_probability >= max(bullish_probability, bearish_probability) and "mean_reversion" in allowed:
+            return StrategyType.MEAN_REVERSION
+        if volatility_state == "expanding" and "volatility_scalping" in allowed:
+            return StrategyType.VOLATILITY_SCALPING
+        if expected_move_percent >= 0.6 and "momentum_breakout" in allowed:
+            return StrategyType.MOMENTUM_BREAKOUT
+        if "bullish" in regime_name.lower() or "bearish" in regime_name.lower():
+            if "momentum_breakout" in allowed:
+                return StrategyType.MOMENTUM_BREAKOUT
+        if "mean_reversion" in allowed:
+            return StrategyType.MEAN_REVERSION
+        return None
+
+    def _trade_allowed(
+        self,
+        current_regime: RegimeResult | RegimeType | str,
+        confidence: float,
+        recommended_strategy: StrategyType | None,
+    ) -> bool:
+        regime_allowed = bool(getattr(current_regime, "allowed_to_trade", True))
+        return bool(
+            regime_allowed
+            and recommended_strategy is not None
+            and confidence >= self.config.strategy.min_confidence_score
+        )
+
+    def _reason(
+        self,
+        *,
+        trade_allowed: bool,
+        confidence: float,
+        regime_name: str,
+        recommended_strategy: StrategyType | None,
+    ) -> str:
+        if not trade_allowed:
+            if recommended_strategy is None:
+                return "No strategy passed confidence, regime, and configuration filters."
+            return f"Trade blocked by filters despite {recommended_strategy.value} suggestion."
+        return f"{recommended_strategy.value} allowed for {regime_name} at {confidence:.1%} confidence."
+
+    @staticmethod
+    def _normalize_regime(regime: RegimeResult | RegimeType | str) -> RegimeType:
+        if isinstance(regime, RegimeResult):
+            return regime.regime
+        if isinstance(regime, RegimeType):
+            return regime
+        normalized = regime.lower().replace(" ", "_").replace("-", "_")
+        for regime_type in RegimeType:
+            if normalized == regime_type.value:
+                return regime_type
+        if "trend" in normalized or "bullish" in normalized or "bearish" in normalized:
+            return RegimeType.TRENDING
+        if "sideways" in normalized or "range" in normalized:
+            return RegimeType.RANGE_BOUND
+        if "high_vol" in normalized:
+            return RegimeType.HIGH_VOLATILITY
+        if "low_vol" in normalized:
+            return RegimeType.LOW_VOLATILITY
+        return RegimeType.UNKNOWN
+
+    @staticmethod
+    def _regime_name(regime: RegimeResult | RegimeType | str, normalized: RegimeType) -> str:
+        if isinstance(regime, RegimeResult):
+            return regime.regime_name or regime.regime.value
+        if isinstance(regime, RegimeType):
+            return regime.value
+        return str(regime) or normalized.value
+
+    @staticmethod
+    def _underlying(
+        features: Mapping[str, Any],
+        regime: RegimeResult | RegimeType | str,
+        option_chain_snapshot: OptionChainSnapshot | None,
+    ) -> str:
+        if option_chain_snapshot:
+            return option_chain_snapshot.underlying
+        symbol = features.get("symbol") or features.get("underlying") or getattr(regime, "symbol", None)
+        return str(symbol or "NIFTY")
+
+    @staticmethod
+    def _spot_price(features: Mapping[str, Any], option_chain_snapshot: OptionChainSnapshot | None) -> float | None:
+        if option_chain_snapshot:
+            return option_chain_snapshot.spot_price
+        return _first_float(features, "close", "spot_price", "last_price", default=None)
+
+    @staticmethod
+    def _predicted_direction(bullish: float, bearish: float, sideways: float) -> str:
+        return max((("bullish", bullish), ("bearish", bearish), ("sideways", sideways)), key=lambda item: item[1])[0]
+
+    @staticmethod
+    def _expected_return_percent(bullish: float, bearish: float, expected_move_percent: float) -> float:
+        return (bullish - bearish) * expected_move_percent
+
+
+def _predict_probabilities(model: Any, features: Mapping[str, Any]) -> tuple[float, ...] | None:
+    try:
+        names = getattr(model, "feature_names_in_", tuple(features.keys()))
+        row = [[float(features.get(name, 0.0) or 0.0) for name in names]]
+        probabilities = model.predict_proba(row)[0]
+        return tuple(float(value) for value in probabilities)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _predict_scalar(model: Any, features: Mapping[str, Any]) -> float | None:
+    try:
+        names = getattr(model, "feature_names_in_", tuple(features.keys()))
+        row = [[float(features.get(name, 0.0) or 0.0) for name in names]]
+        return float(model.predict(row)[0])
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _normalize_three(values: tuple[float, ...]) -> tuple[float, float, float]:
+    padded = tuple(values[:3]) + (0.0,) * max(0, 3 - len(values))
+    cleaned = tuple(max(0.0, float(value)) for value in padded[:3])
+    total = sum(cleaned)
+    if total <= 0:
+        return 1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0
+    return cleaned[0] / total, cleaned[1] / total, cleaned[2] / total
+
+
+def _first_float(features: Mapping[str, Any], *names: str, default: float | None = 0.0) -> float:
+    for name in names:
+        value = _as_float(features.get(name))
+        if value is not None:
+            return value
+    return float(default) if default is not None else 0.0
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

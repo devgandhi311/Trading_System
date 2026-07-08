@@ -1,0 +1,34 @@
+# Required runtime, analytics, dashboard, broker, and test dependencies.
+pandas
+numpy
+scipy
+scikit-learn
+statsmodels
+arch
+hmmlearn
+pyyaml
+python-dotenv
+pyotp
+requests
+websocket-client
+openpyxl
+matplotlib
+plotly
+streamlit
+loguru
+sqlalchemy
+pydantic
+pytest
+
+# Optional ML/MLOps dependencies. Install only when the related feature is needed.
+# xgboost
+# lightgbm
+# torch
+# tensorflow
+# mlflow
+# optuna
+# ta-lib
+
+# Optional local news sentiment dependencies.
+# vaderSentiment
+# textblob

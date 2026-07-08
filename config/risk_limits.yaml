@@ -1,0 +1,12 @@
+capital: 1000000.0
+max_daily_loss_percent: 2.0
+max_daily_profit_lock_percent: 4.0
+max_loss_per_trade_percent: 0.5
+max_open_positions: 5
+max_trades_per_day: 10
+max_consecutive_losses: 3
+max_margin_usage_percent: 50.0
+max_bid_ask_spread_percent: 1.0
+max_slippage_percent: 0.2
+order_timeout_seconds: 30
+emergency_market_exit_allowed: true

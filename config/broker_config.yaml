@@ -1,0 +1,28 @@
+broker_name: paper
+paper_broker:
+  initial_balance: 1000000.0
+  fill_model: conservative
+  default_order_type: LIMIT
+  allow_short_positions: true
+
+api:
+  base_url: https://api.example-broker.invalid
+  timeout_seconds: 10
+  retry_attempts: 3
+  retry_backoff_seconds: 1.5
+
+websocket:
+  enabled: true
+  heartbeat_timeout_seconds: 30
+  reconnect_attempts: 3
+  max_disconnects_before_kill_switch: 5
+  latest_ticks_path: data/live/latest_ticks.json
+
+orders:
+  product_type: MIS
+  validity: DAY
+  variety: regular
+  allow_market_orders: false
+  emergency_exit_order_type: MARKET
+
+# Keep credentials, tokens, keys, passwords, and client secrets in .env only.
