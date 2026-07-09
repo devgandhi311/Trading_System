@@ -65,7 +65,7 @@ python main.py init
 Run a sample backtest and write an Excel report:
 
 ```powershell
-python run_backtest.py --sample --rows 180 --report-dir reports/backtests
+python run_backtest.py --sample --rows 500 --report-dir reports/backtests
 ```
 
 Run the PAPER smoke workflow and write dashboard state files:
@@ -97,6 +97,7 @@ Configuration lives in `config/`:
 - `strategy_config.yaml` - enabled strategies, expiry type, confidence threshold, regimes, lot sizes, and sizing.
 - `broker_config.yaml` - broker-level non-secret settings only.
 - `instruments.yaml` - tradable instrument metadata.
+- `news_config.yaml` - provider fallback order, cache settings, sentiment thresholds, event-risk keywords, and news risk rules.
 
 Load config in code:
 
@@ -106,6 +107,30 @@ from utils.config_loader import ConfigLoader
 config = ConfigLoader().load()
 print(config.settings.mode)
 ```
+
+## Runtime Folders
+
+Create these local folders before running data, model, report, or dashboard workflows:
+
+```text
+data/raw/nse_30_years/
+data/raw/option_chain/
+data/raw/broker_downloads/
+data/processed/
+data/features/
+data/model_data/
+data/live/
+data/news_cache/
+reports/backtests/
+reports/daily/
+reports/trade_logs/
+reports/model_reports/
+reports/risk_reports/
+reports/html_reports/
+logs/
+```
+
+These folders are runtime outputs and should not contain secrets. Large historical NSE datasets should be added locally under `data/raw/nse_30_years/`.
 
 ## .env Format
 

@@ -23,6 +23,14 @@ class WorkingProvider:
         return ()
 
 
+class CacheWithArticle:
+    def get_articles(self, key):
+        return (NewsArticle("Cached high-risk headline", "Reuters", now_ist(), provider="cache"),)
+
+    def set_articles(self, key, articles):
+        raise AssertionError("cache should not be written when keys are missing")
+
+
 def test_news_fetcher_uses_backup_provider() -> None:
     fetcher = NewsFetcher(providers={"finnhub": FailingProvider(), "alpha_vantage": WorkingProvider(), "marketaux": WorkingProvider()})
 
@@ -30,6 +38,15 @@ def test_news_fetcher_uses_backup_provider() -> None:
 
     assert len(articles) == 1
     assert "RBI" in articles[0].headline
+
+
+def test_news_fetcher_ignores_cache_when_api_keys_missing() -> None:
+    fetcher = NewsFetcher(cache=CacheWithArticle())
+
+    articles = fetcher.fetch_all()
+
+    assert articles == ()
+    assert fetcher.last_error == "News API keys are missing"
 
 
 def test_news_cleaner_deduplicates_and_tags() -> None:

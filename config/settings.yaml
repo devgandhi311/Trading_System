@@ -16,5 +16,5 @@ data_paths:
 
 report_paths:
   daily: reports/daily
-  trades: reports/trades
-  risk: reports/risk
+  trades: reports/trade_logs
+  risk: reports/risk_reports

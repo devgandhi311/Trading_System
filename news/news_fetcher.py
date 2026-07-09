@@ -39,6 +39,10 @@ class NewsFetcher:
 
         if not self.config.enabled:
             return ()
+        if not self._has_configured_provider_credentials():
+            self.last_error = "News API keys are missing"
+            LOGGER.warning("News API keys missing; using neutral news risk")
+            return ()
         cache_key = "all_news"
         if use_cache and self.config.cache_enabled:
             cached = self.cache.get_articles(cache_key)
@@ -68,3 +72,23 @@ class NewsFetcher:
 
     def _provider_order(self) -> tuple[str, ...]:
         return (self.config.primary_provider, *self.config.backup_providers)
+
+    def _has_configured_provider_credentials(self) -> bool:
+        """Return whether at least one configured provider can authenticate.
+
+        Test doubles and offline adapters may not expose an ``api_key`` attribute;
+        those are treated as usable so unit tests can inject deterministic
+        providers without environment secrets.
+        """
+
+        saw_api_key_provider = False
+        for provider_name in self._provider_order():
+            provider = self.providers.get(provider_name)
+            if provider is None:
+                continue
+            if not hasattr(provider, "api_key"):
+                return True
+            saw_api_key_provider = True
+            if getattr(provider, "api_key", None):
+                return True
+        return not saw_api_key_provider
