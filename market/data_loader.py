@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import hashlib
 import logging
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
+
+import numpy as np
 
 import pandas as pd
 
 from market.data_preprocessor import DataPreprocessor
 from market.data_store import DataStore
+from models.market_models import DatasetManifest
 from utils.config_loader import ConfigLoader
 from utils.exceptions import DataValidationError
 from utils.file_utils import ensure_parent_dir
@@ -30,6 +36,7 @@ class DataQualityReport:
     removed_duplicate_rows: int
     output_path: Path
     report_path: Path
+    manifest: DatasetManifest
 
 
 class DataLoader:
@@ -44,6 +51,7 @@ class DataLoader:
         "volume": {"volume", "vol", "tradedqty", "traded_quantity", "qty", "sharestraded", "shares_traded"},
     }
     SUPPORTED_SUFFIXES = {".csv", ".xlsx", ".xls", ".parquet"}
+    LOADER_VERSION = "1.0"
 
     def __init__(
         self,
@@ -77,11 +85,45 @@ class DataLoader:
         if not files:
             raise DataValidationError(f"No NSE data files found in {self.raw_dir}")
         frames = [self._read_file(path) for path in files]
+        detected_columns = tuple(sorted({str(column) for frame in frames for column in frame.columns}))
+        for path, frame in zip(files, frames, strict=True):
+            try:
+                self._standardize_columns(frame)
+            except DataValidationError as exc:
+                raise DataValidationError(f"Invalid schema in historical data file {path}: {exc}") from exc
         raw = pd.concat(frames, ignore_index=True)
+        missing_value_counts = {
+            str(column): int(raw[column].isna().sum()) for column in raw.columns
+        }
         clean, stats = self.clean(raw)
+        if clean.empty:
+            raise DataValidationError("NSE dataset contains no valid rows after validation")
         if preprocess:
             clean = self.preprocessor.preprocess(clean)
         output_path = self.data_store.save_processed(clean, dataset_name)
+        invalid_rows = stats["removed_bad_ohlc_rows"] + stats["removed_missing_rows"]
+        manifest = DatasetManifest(
+            manifest_id=str(uuid4()),
+            data_source="REAL",
+            source_type="REAL",
+            source_file_paths=tuple(str(path.resolve()) for path in files),
+            source_file_hashes={str(path.resolve()): self._sha256(path) for path in files},
+            source_file_sizes={str(path.resolve()): path.stat().st_size for path in files},
+            detected_file_formats={str(path.resolve()): path.suffix.lower().lstrip(".") for path in files},
+            row_count=len(clean),
+            first_timestamp=pd.Timestamp(clean["date"].min()).to_pydatetime(),
+            last_timestamp=pd.Timestamp(clean["date"].max()).to_pydatetime(),
+            detected_columns=detected_columns,
+            normalized_columns=("date", "open", "high", "low", "close", "volume"),
+            removed_rows=invalid_rows + stats["removed_duplicate_rows"],
+            duplicate_rows=stats["removed_duplicate_rows"],
+            invalid_rows=invalid_rows,
+            missing_value_counts=missing_value_counts,
+            timezone=self.config.settings.timezone,
+            generated_sample=False,
+            loader_version=self.LOADER_VERSION,
+            creation_timestamp=datetime.now(timezone.utc),
+        )
         report = DataQualityReport(
             source_files=len(files),
             raw_rows=len(raw),
@@ -91,6 +133,7 @@ class DataLoader:
             removed_duplicate_rows=stats["removed_duplicate_rows"],
             output_path=output_path,
             report_path=self.report_path,
+            manifest=manifest,
         )
         self.save_quality_report(report)
         LOGGER.info("NSE data loaded", extra={"rows": len(clean), "files": len(files)})
@@ -149,7 +192,10 @@ class DataLoader:
             {"metric": "removed_duplicate_rows", "value": report.removed_duplicate_rows},
             {"metric": "output_path", "value": str(report.output_path)},
         ]
-        pd.DataFrame(rows).to_excel(report.report_path, index=False)
+        manifest_rows = [{"field": key, "value": str(value)} for key, value in report.manifest.as_dict().items()]
+        with pd.ExcelWriter(report.report_path) as writer:
+            pd.DataFrame(rows).to_excel(writer, sheet_name="Data_Quality", index=False)
+            pd.DataFrame(manifest_rows).to_excel(writer, sheet_name="Dataset_Manifest", index=False)
         return report.report_path
 
     def _discover_files(self) -> list[Path]:
@@ -162,14 +208,29 @@ class DataLoader:
         )
 
     def _read_file(self, path: Path) -> pd.DataFrame:
-        suffix = path.suffix.lower()
-        if suffix == ".csv":
-            return pd.read_csv(path)
-        if suffix in {".xlsx", ".xls"}:
-            return pd.read_excel(path)
-        if suffix == ".parquet":
-            return pd.read_parquet(path)
-        raise DataValidationError(f"Unsupported file format: {path}")
+        try:
+            suffix = path.suffix.lower()
+            if suffix == ".csv":
+                return pd.read_csv(path)
+            if suffix in {".xlsx", ".xls"}:
+                return pd.read_excel(path)
+            if suffix == ".parquet":
+                return pd.read_parquet(path)
+            raise DataValidationError(f"Unsupported file format: {path}")
+        except DataValidationError:
+            raise
+        except Exception as exc:
+            raise DataValidationError(f"Malformed historical data file {path}: {exc}") from exc
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        """Return the SHA-256 digest of a source file."""
+
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     def _standardize_columns(self, dataframe: pd.DataFrame) -> pd.DataFrame:
         normalized_columns = {
@@ -186,3 +247,25 @@ class DataLoader:
     @staticmethod
     def _normalize_column_name(value: Any) -> str:
         return "".join(character for character in str(value).lower() if character.isalnum() or character == "_")
+
+
+def generate_sample_ohlcv(rows: int, *, seed: int | None = None) -> pd.DataFrame:
+    """Return deterministic generated OHLCV data for explicit sample runs only."""
+
+    count = max(int(rows), 40)
+    dates = pd.date_range("2024-01-01", periods=count, freq="B")
+    if seed is None:
+        close = 20_000 + np.linspace(0, 500, count) + np.sin(np.arange(count) / 4) * 35
+    else:
+        rng = np.random.default_rng(seed)
+        close = 26_000 * np.cumprod(1.0 + rng.normal(0.0002, 0.01, count))
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": close - 8,
+            "high": close + 35,
+            "low": close - 35,
+            "close": close,
+            "volume": np.full(count, 1_000_000),
+        }
+    )

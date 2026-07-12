@@ -144,6 +144,14 @@ def _audit_line(rel: str, line_no: int, line: str) -> list[AuditFinding]:
                 "Use default backward-looking rolling windows.",
             )
         )
+    if re.search(r"\.(?:bfill|backfill)\s*\(", line):
+        findings.append(
+            AuditFinding(
+                "FAIL", "HIGH", "Backward fill", rel, line_no, line,
+                "Backward filling can copy future observations into historical rows.",
+                "Use forward fill only when the data timing contract permits it.",
+            )
+        )
     if re.search(r"\bfit_transform\(", line):
         findings.append(
             AuditFinding(
@@ -157,7 +165,7 @@ def _audit_line(rel: str, line_no: int, line: str) -> list[AuditFinding]:
                 "Fit transformers inside each walk-forward training fold.",
             )
         )
-    if re.search(r"\btrain_test_split\(|\bKFold\(|shuffle\s*=\s*True", line):
+    if re.search(r"\btrain_test_split\(|(?<!TimeSeries)\bKFold\(|shuffle\s*=\s*True", line):
         findings.append(
             AuditFinding(
                 "FAIL",

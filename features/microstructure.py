@@ -81,8 +81,10 @@ def _rolling_vwap(data: pd.DataFrame, rolling_window: int) -> pd.Series:
 
 
 def _minmax(series: pd.Series) -> pd.Series:
-    minimum = series.rolling(len(series), min_periods=1).min()
-    maximum = series.rolling(len(series), min_periods=1).max()
+    """Normalize against observations available at each row only."""
+
+    minimum = series.expanding(min_periods=1).min()
+    maximum = series.expanding(min_periods=1).max()
     return ((series - minimum) / (maximum - minimum).replace(0, np.nan)).fillna(0.5)
 
 

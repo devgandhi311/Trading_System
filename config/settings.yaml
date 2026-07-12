@@ -1,5 +1,6 @@
 mode: PAPER
 live_trading_enabled: false
+live_order_submission_enabled: false
 timezone: Asia/Kolkata
 market_start_time: "09:15"
 market_end_time: "15:30"

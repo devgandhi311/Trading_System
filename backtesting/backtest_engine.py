@@ -183,6 +183,8 @@ class BacktestEngine:
         config: BacktestConfig,
         prediction: PredictionResult | None = None,
     ) -> dict[str, Any]:
+        signal_index = entry_index
+        entry_index = signal_index + 1
         entry_bar = features.iloc[entry_index]
         entry_side = OrderSide.BUY if direction == "long" else OrderSide.SELL
         entry_price = float(entry_bar["close"]) * (1.0 + config.entry_buffer_percent / 100.0 * (1 if direction == "long" else -1))
@@ -223,6 +225,8 @@ class BacktestEngine:
         costs = self.cost_model.estimate(price=entry_price, quantity=config.quantity, orders=2)
         net_pnl = gross_pnl - costs
         return {
+            "signal_index": signal_index,
+            "signal_date": features.iloc[signal_index]["date"],
             "entry_index": entry_index,
             "exit_index": exit_index,
             "entry_date": entry_bar["date"],

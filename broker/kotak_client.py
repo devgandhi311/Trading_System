@@ -19,6 +19,8 @@ from models.broker_models import (
 from utils.config_loader import ConfigLoader
 from utils.exceptions import BrokerError
 from utils.time_utils import now_ist
+from broker.kotak_order_payload import build_kotak_order_payload, sanitize_payload
+from models.order_models import OrderRequest, OrderResponse
 
 LOGGER = logging.getLogger("broker")
 
@@ -62,6 +64,7 @@ class KotakClient:
         mode: Mode | str | None = None,
         config_loader: ConfigLoader | None = None,
         mock_prices: dict[str, float] | None = None,
+        dry_run: bool = True,
     ) -> None:
         """Create a read-only Kotak client.
 
@@ -80,6 +83,10 @@ class KotakClient:
             "MIDCPNIFTY": 13000.0,
             **(mock_prices or {}),
         }
+        if dry_run is not True:
+            raise BrokerError("Kotak order adapter dry_run cannot be disabled yet")
+        self.dry_run = True
+        self._dry_orders: dict[str, OrderResponse] = {}
         LOGGER.info("Kotak client initialized", extra={"mode": self.mode.value})
 
     @property
@@ -179,6 +186,47 @@ class KotakClient:
                 timestamp=now_ist(),
             )
         return self._order_from_mapping(self._as_mapping(self._call_live("get_order_status", order_id)))
+
+    def place_order(self, order_request: OrderRequest, *, idempotency_key: str,
+                    risk_approval_token: str, order_validator_approval_token: str) -> OrderResponse:
+        """Map an approved order and simulate submission; transmission is unavailable."""
+        self._check_order_approvals(idempotency_key, risk_approval_token, order_validator_approval_token)
+        existing = self._dry_orders.get(idempotency_key)
+        if existing:
+            return existing
+        payload = build_kotak_order_payload(order_request)
+        LOGGER.info("Kotak dry-run order", extra={"payload": sanitize_payload(payload)})
+        response = OrderResponse(
+            order_id=f"DRY-{idempotency_key}", status=OrderStatus.SUBMITTED, timestamp=now_ist(),
+            symbol=order_request.symbol, side=order_request.side, quantity=order_request.quantity,
+            raw_response={"dry_run": True, "payload": payload, "idempotency_key": idempotency_key},
+        )
+        self._dry_orders[idempotency_key] = response
+        return response
+
+    def modify_order(self, order_id: str, changes: dict[str, Any], *, idempotency_key: str,
+                     risk_approval_token: str, order_validator_approval_token: str) -> dict[str, Any]:
+        self._check_order_approvals(idempotency_key, risk_approval_token, order_validator_approval_token)
+        if not order_id:
+            raise BrokerError("order_id is required")
+        LOGGER.info("Kotak dry-run modify", extra={"order_id": order_id, "changes": sanitize_payload(changes)})
+        return {"order_id": order_id, "status": "SUBMITTED", "dry_run": True, "changes": dict(changes)}
+
+    def cancel_order(self, order_id: str, *, idempotency_key: str, risk_approval_token: str,
+                     order_validator_approval_token: str) -> dict[str, Any]:
+        self._check_order_approvals(idempotency_key, risk_approval_token, order_validator_approval_token)
+        if not order_id:
+            raise BrokerError("order_id is required")
+        LOGGER.info("Kotak dry-run cancel", extra={"order_id": order_id})
+        return {"order_id": order_id, "status": "CANCELLED", "dry_run": True}
+
+    def _check_order_approvals(self, idempotency_key: str, risk_token: str, validator_token: str) -> None:
+        if self.mode != Mode.LIVE:
+            raise BrokerError("Kotak order methods require LIVE mode")
+        if not self.dry_run:
+            raise BrokerError("Live transmission is not implemented")
+        if not idempotency_key or not risk_token or not validator_token:
+            raise BrokerError("idempotency, risk approval, and order-validator approval are required")
 
     def get_holdings(self) -> tuple[HoldingSnapshot, ...]:
         """Return account holdings."""

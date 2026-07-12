@@ -25,10 +25,12 @@ class StrategyV2ReportWriter:
         vol_forecasts: pd.DataFrame,
         stress_tests: pd.DataFrame,
         no_trade_days: pd.DataFrame,
+        dataset_manifest: Mapping[str, Any],
     ) -> Path:
         """Save final_backtest_V2_report.xlsx with all required sheets."""
 
-        report_path = ensure_parent_dir(Path(report_dir) / "final_backtest_V2_report.xlsx")
+        source_type = str(summary.get("data_source", "UNKNOWN")).upper()
+        report_path = ensure_parent_dir(Path(report_dir) / f"final_backtest_V2_{source_type}_report.xlsx")
         trades = trades.copy()
         equity_curve = _equity_curve(trades)
         drawdown = _drawdown(equity_curve)
@@ -38,6 +40,9 @@ class StrategyV2ReportWriter:
         gross_net = _gross_vs_net(trades)
         with pd.ExcelWriter(report_path) as writer:
             pd.DataFrame([dict(summary)]).to_excel(writer, sheet_name="Summary", index=False)
+            pd.DataFrame([{"field": key, "value": str(value)} for key, value in dataset_manifest.items()]).to_excel(
+                writer, sheet_name="Dataset_Manifest", index=False
+            )
             _sheet(trades).to_excel(writer, sheet_name="Trades", index=False)
             _sheet(strategy_candidates).to_excel(writer, sheet_name="Strategy Candidates", index=False)
             _sheet(rejected_candidates).to_excel(writer, sheet_name="Rejected Candidates", index=False)

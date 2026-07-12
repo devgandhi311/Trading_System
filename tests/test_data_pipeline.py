@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 
 import pandas as pd
 import pytest
@@ -38,6 +39,34 @@ def test_data_loader_validates_removes_duplicates_and_saves_report(tmp_path: Pat
     assert report.removed_duplicate_rows == 1
     assert report.output_path.exists()
     assert report.report_path.exists()
+    assert report.manifest.data_source == "REAL"
+    assert report.manifest.generated_sample is False
+    assert report.manifest.row_count == 2
+    assert report.manifest.first_timestamp.isoformat().startswith("2024-01-01")
+    assert report.manifest.last_timestamp.isoformat().startswith("2024-01-03")
+    assert report.manifest.removed_rows == 3
+    assert report.manifest.duplicate_rows == 1
+    assert report.manifest.invalid_rows == 2
+    source_path = str((raw_dir / "nifty.csv").resolve())
+    assert report.manifest.source_file_hashes[source_path] == hashlib.sha256((raw_dir / "nifty.csv").read_bytes()).hexdigest()
+    assert "Date" in report.manifest.detected_columns
+    assert report.manifest.manifest_id
+    assert report.manifest.source_type == "REAL"
+    assert report.manifest.source_file_sizes[source_path] == (raw_dir / "nifty.csv").stat().st_size
+    assert report.manifest.detected_file_formats[source_path] == "csv"
+    assert report.manifest.normalized_columns == ("date", "open", "high", "low", "close", "volume")
+    assert report.manifest.missing_value_counts["Date"] == 1
+    assert report.manifest.timezone == "Asia/Kolkata"
+    assert report.manifest.loader_version == DataLoader.LOADER_VERSION
+    assert "Dataset_Manifest" in pd.ExcelFile(report.report_path).sheet_names
+    discovered = {str(path.resolve()) for path in (raw_dir / "nifty.csv", raw_dir / "nifty_extra.xlsx")}
+    assert set(report.manifest.source_file_paths) == discovered
+    assert set(report.manifest.source_file_hashes) == discovered
+    assert set(report.manifest.source_file_sizes) == discovered
+    for path_text in discovered:
+        path = Path(path_text)
+        assert report.manifest.source_file_hashes[path_text] == hashlib.sha256(path.read_bytes()).hexdigest()
+        assert report.manifest.source_file_sizes[path_text] == path.stat().st_size
 
 
 def test_data_loader_auto_detects_alias_columns() -> None:
@@ -57,6 +86,44 @@ def test_data_loader_raises_on_missing_required_columns() -> None:
 
     with pytest.raises(DataValidationError, match="Missing required column"):
         loader.clean(pd.DataFrame([{"Date": "2024-01-01", "Open": 1}]))
+
+
+def test_data_loader_missing_real_data_fails_closed(tmp_path: Path) -> None:
+    loader = DataLoader(raw_dir=tmp_path / "missing")
+
+    with pytest.raises(DataValidationError, match="No NSE data files found"):
+        loader.load_30_years_nse_data()
+
+
+def test_data_loader_malformed_real_file_fails_closed(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    (raw_dir / "broken.xlsx").write_bytes(b"not an excel workbook")
+    loader = DataLoader(raw_dir=raw_dir)
+
+    with pytest.raises(DataValidationError, match="Malformed historical data file"):
+        loader.load_30_years_nse_data()
+
+
+def test_data_loader_invalid_real_schema_fails_closed(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    pd.DataFrame([{"Date": "2024-01-01", "Open": 100.0}]).to_csv(raw_dir / "invalid.csv", index=False)
+    loader = DataLoader(raw_dir=raw_dir)
+
+    with pytest.raises(DataValidationError, match="Invalid schema.*Missing required column"):
+        loader.load_30_years_nse_data()
+
+
+def test_data_loader_empty_after_validation_fails_closed(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    pd.DataFrame(
+        [{"Date": None, "Open": 100, "High": 110, "Low": 90, "Close": 105, "Volume": 10}]
+    ).to_csv(raw_dir / "empty.csv", index=False)
+
+    with pytest.raises(DataValidationError, match="no valid rows"):
+        DataLoader(raw_dir=raw_dir).load_30_years_nse_data()
 
 
 def test_data_store_save_load_processed_features_and_models(tmp_path: Path) -> None:

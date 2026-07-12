@@ -8,6 +8,58 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class DatasetManifest:
+    """Immutable provenance and quality summary for a backtest dataset."""
+
+    manifest_id: str
+    data_source: str
+    source_type: str
+    source_file_paths: tuple[str, ...]
+    source_file_hashes: dict[str, str]
+    source_file_sizes: dict[str, int]
+    detected_file_formats: dict[str, str]
+    row_count: int
+    first_timestamp: datetime
+    last_timestamp: datetime
+    detected_columns: tuple[str, ...]
+    normalized_columns: tuple[str, ...]
+    removed_rows: int
+    duplicate_rows: int
+    invalid_rows: int
+    missing_value_counts: dict[str, int]
+    timezone: str
+    generated_sample: bool
+    loader_version: str
+    creation_timestamp: datetime
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable manifest representation."""
+
+        return {
+            "manifest_id": self.manifest_id,
+            "data_source": self.data_source,
+            "source_type": self.source_type,
+            "source_file_paths": list(self.source_file_paths),
+            "source_file_hashes": dict(self.source_file_hashes),
+            "source_file_sizes": dict(self.source_file_sizes),
+            "detected_file_formats": dict(self.detected_file_formats),
+            "row_count": self.row_count,
+            "first_timestamp": self.first_timestamp.isoformat(),
+            "last_timestamp": self.last_timestamp.isoformat(),
+            "detected_columns": list(self.detected_columns),
+            "normalized_columns": list(self.normalized_columns),
+            "removed_rows": self.removed_rows,
+            "duplicate_rows": self.duplicate_rows,
+            "invalid_rows": self.invalid_rows,
+            "missing_value_counts": dict(self.missing_value_counts),
+            "timezone": self.timezone,
+            "generated_sample": self.generated_sample,
+            "loader_version": self.loader_version,
+            "creation_timestamp": self.creation_timestamp.isoformat(),
+        }
+
+
+@dataclass(frozen=True)
 class MarketBar:
     """OHLCV market bar for a symbol and timeframe."""
 

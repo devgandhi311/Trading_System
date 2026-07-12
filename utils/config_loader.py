@@ -27,6 +27,7 @@ class SettingsConfig:
 
     mode: Mode
     live_trading_enabled: bool
+    live_order_submission_enabled: bool
     timezone: str
     market_start_time: str
     market_end_time: str
@@ -239,6 +240,11 @@ class ConfigLoader:
     def _parse_settings(self, data: Mapping[str, Any]) -> SettingsConfig:
         mode = Mode(self._required_str(data, "mode").upper())
         live_trading_enabled = self._required_bool(data, "live_trading_enabled")
+        live_order_submission_enabled = data.get("live_order_submission_enabled", False)
+        if not isinstance(live_order_submission_enabled, bool):
+            raise ConfigError("live_order_submission_enabled must be a boolean")
+        if live_order_submission_enabled and not live_trading_enabled:
+            raise ConfigError("live_order_submission_enabled requires live_trading_enabled: true")
         timezone = self._required_str(data, "timezone")
         try:
             ZoneInfo(timezone)
@@ -269,6 +275,7 @@ class ConfigLoader:
         return SettingsConfig(
             mode=mode,
             live_trading_enabled=live_trading_enabled,
+            live_order_submission_enabled=live_order_submission_enabled,
             timezone=timezone,
             market_start_time=market_start,
             market_end_time=market_end,

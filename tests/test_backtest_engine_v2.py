@@ -39,6 +39,9 @@ def test_backtest_engine_v2_runs_and_writes_report(tmp_path) -> None:
     assert result.report_path.exists()
     assert "trades" in result.summary
     assert set(result.trades.columns) >= {"strategy", "gross_pnl", "net_pnl"} or result.trades.empty
+    assert "REAL" in result.report_path.name
+    assert "Dataset_Manifest" in pd.ExcelFile(result.report_path).sheet_names
+    assert (result.report_path.with_name(f"{result.report_path.stem}_dataset_manifest.json")).exists()
 
 
 def _candidate(payoff: float = 100.0, legs: int = 1):

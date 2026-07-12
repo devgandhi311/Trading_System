@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from dataclasses import dataclass, replace
+from datetime import datetime, time, timedelta, timezone
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 import pandas as pd
 
 from backtesting.transaction_costs import TransactionCostModel
 from features.feature_pipeline import FeaturePipeline
-from market.data_loader import DataLoader
+from market.data_loader import DataLoader, generate_sample_ohlcv
 from models import Mode
+from models.market_models import DatasetManifest
 from quant.distribution.expiry_distribution import ExpiryDistributionEngine
 from quant.optimization.portfolio_risk_optimizer import PortfolioRiskOptimizer
 from quant.stress.monte_carlo_stress import MonteCarloStressTester
@@ -114,6 +117,17 @@ class BacktestEngineV2:
         source_rows = len(data)
         if active.max_rows:
             data = data.tail(active.max_rows).reset_index(drop=True)
+        minimum_rows = max(40, active.lookback + active.days_to_expiry + 1)
+        if len(data) < minimum_rows:
+            raise DataValidationError(
+                f"Insufficient history for V2 backtest: found {len(data)} rows; require at least {minimum_rows}"
+            )
+        manifest = replace(
+            self._last_manifest,
+            row_count=len(data),
+            first_timestamp=pd.Timestamp(data["date"].min()).to_pydatetime(),
+            last_timestamp=pd.Timestamp(data["date"].max()).to_pydatetime(),
+        )
         features = self.feature_pipeline.generate_features(data, cache=False).features
         trades: list[dict[str, Any]] = []
         candidate_rows: list[dict[str, Any]] = []
@@ -333,16 +347,25 @@ class BacktestEngineV2:
             vol_forecasts=pd.DataFrame(vol_rows),
             stress_tests=pd.DataFrame(stress_rows),
             no_trade_days=pd.DataFrame(no_trade_rows),
+            dataset_manifest=manifest.as_dict(),
         )
+        manifest_path = report_path.with_name(f"{report_path.stem}_dataset_manifest.json")
+        manifest_path.write_text(json.dumps(manifest.as_dict(), indent=2, sort_keys=True), encoding="utf-8")
+        summary["dataset_manifest"] = str(manifest_path)
         summary["report_path"] = str(report_path)
         return BacktestV2Result(trades_frame, report_path, summary)
 
     def _load_data(self, historical_data: pd.DataFrame | None, config: BacktestV2Config) -> tuple[pd.DataFrame, str, list[str]]:
         if historical_data is not None:
-            return historical_data.reset_index(drop=True), "REAL", ["provided_dataframe"]
+            data = historical_data.reset_index(drop=True)
+            self._last_manifest = _frame_manifest(data, source_type="REAL", generated_sample=False)
+            return data, "REAL", ["provided_dataframe"]
         if config.use_sample_data:
-            return _sample_data(config.sample_rows), "SAMPLE", ["deterministic_generated_sample"]
+            data = generate_sample_ohlcv(config.sample_rows, seed=17)
+            self._last_manifest = _frame_manifest(data, source_type="SAMPLE", generated_sample=True)
+            return data, "SAMPLE", ["deterministic_generated_sample"]
         data, report = self.data_loader.load_30_years_nse_data(dataset_name="backtest_v2_clean")
+        self._last_manifest = report.manifest
         files = [str(path) for path in self.data_loader._discover_files()]
         return data.reset_index(drop=True), "REAL", files
 
@@ -389,6 +412,7 @@ class BacktestEngineV2:
         vol_forecasts: pd.DataFrame,
         stress_tests: pd.DataFrame,
         no_trade_days: pd.DataFrame,
+        dataset_manifest: dict[str, Any],
     ) -> Path:
         return self.report_writer.save(
             report_dir=self.report_dir,
@@ -400,7 +424,25 @@ class BacktestEngineV2:
             vol_forecasts=vol_forecasts,
             stress_tests=stress_tests,
             no_trade_days=no_trade_days,
+            dataset_manifest=dataset_manifest,
         )
+
+
+def _frame_manifest(data: pd.DataFrame, *, source_type: str, generated_sample: bool) -> DatasetManifest:
+    """Build provenance for an explicit in-memory or generated V2 dataset."""
+
+    return DatasetManifest(
+        manifest_id=str(uuid4()), data_source=source_type, source_type=source_type,
+        source_file_paths=(), source_file_hashes={}, source_file_sizes={}, detected_file_formats={},
+        row_count=len(data), first_timestamp=pd.Timestamp(data["date"].min()).to_pydatetime(),
+        last_timestamp=pd.Timestamp(data["date"].max()).to_pydatetime(),
+        detected_columns=tuple(str(column) for column in data.columns),
+        normalized_columns=tuple(str(column) for column in data.columns), removed_rows=0,
+        duplicate_rows=0, invalid_rows=0,
+        missing_value_counts={str(column): int(data[column].isna().sum()) for column in data.columns},
+        timezone="Asia/Kolkata", generated_sample=generated_sample,
+        loader_version=DataLoader.LOADER_VERSION, creation_timestamp=datetime.now(timezone.utc),
+    )
 
 
 def _payoff_at(candidate: Any, expiry_price: float) -> float:
@@ -656,12 +698,3 @@ def _regime_stats(daily_signal_log: pd.DataFrame) -> pd.DataFrame:
 
 def _safe_sheet(dataframe: pd.DataFrame) -> pd.DataFrame:
     return dataframe if not dataframe.empty else pd.DataFrame({"status": ["no rows"]})
-
-
-def _sample_data(rows: int = 220) -> pd.DataFrame:
-    rng = np.random.default_rng(17)
-    returns = rng.normal(0.0002, 0.01, rows)
-    close = 26000.0 * np.cumprod(1.0 + returns)
-    high = close * 1.005
-    low = close * 0.995
-    return pd.DataFrame({"date": pd.date_range("2024-01-01", periods=rows, freq="B"), "open": close, "high": high, "low": low, "close": close, "volume": 100000})

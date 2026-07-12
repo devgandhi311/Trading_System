@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         default="init",
         help="Action to run. Defaults to safe initialization only.",
     )
-    args = parser.parse_args(argv)
+    args, forwarded = parser.parse_known_args(argv)
     loader = initialize_application()
     config = loader.load()
     if args.command == "init":
@@ -52,7 +52,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "backtest":
         from run_backtest import main as run_backtest_main
 
-        return run_backtest_main(["--sample"])
+        return run_backtest_main(forwarded)
+    if forwarded:
+        parser.error(f"unrecognized arguments: {' '.join(forwarded)}")
     if args.command == "paper":
         from run_paper import main as run_paper_main
 

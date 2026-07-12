@@ -2,6 +2,10 @@
 
 Python 3.11+ trading research and execution scaffold for NIFTY-style strategies. The project is built around safe defaults: paper trading is the default, live trading is disabled unless explicitly enabled, and credentials are never stored in code or YAML.
 
+## Project Direction
+
+The permanent project goal and safety constraints are defined in the [Project Charter](PROJECT_CHARTER.md). The objective criteria that must all pass before this project may be called a finished autonomous live bot are in the [Definition of Done](docs/DEFINITION_OF_DONE.md).
+
 ## Risk Warning
 
 Trading options and leveraged instruments can cause rapid financial loss. This software is for research, backtesting, and controlled paper trading unless you have independently reviewed, tested, and accepted the operational risk. Live trading must remain disabled by default.
