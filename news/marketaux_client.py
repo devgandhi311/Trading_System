@@ -13,6 +13,7 @@ except ImportError:  # pragma: no cover - exercised only in minimal environments
 
 from news.news_config import NewsArticle, article_from_mapping
 from utils.exceptions import BrokerError
+from utils.env_loader import load_project_env
 
 LOGGER = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class MarketauxClient:
     base_url = "https://api.marketaux.com/v1/news/all"
 
     def __init__(self, *, api_key: str | None = None, timeout_seconds: int = 10) -> None:
+        load_project_env()
         self.api_key = api_key or os.getenv("MARKETAUX_API_KEY")
         self.timeout_seconds = timeout_seconds
 

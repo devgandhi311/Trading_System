@@ -50,6 +50,7 @@ class StrategyType(StrEnum):
     VOLATILITY_SCALPING = "volatility_scalping"
     IRON_CONDOR = "iron_condor"
     CREDIT_SPREAD = "credit_spread"
+    EXPECTED_MOVE_CREDIT_SPREAD = "expected_move_credit_spread"
     DEBIT_SPREAD = "debit_spread"
     LONG_GAMMA = "long_gamma"
     SHORT_STRANGLE = "short_strangle"

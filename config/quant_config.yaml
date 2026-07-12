@@ -1,0 +1,23 @@
+distribution:
+  lookback_days: 252
+  confidence_levels: [0.68, 0.80, 0.90, 0.95]
+  use_parametric: true
+  use_empirical: true
+  use_monte_carlo: true
+
+volatility:
+  realized_vol_window: 20
+  garch_enabled: true
+  egarch_enabled: true
+  fallback_to_realized_vol: true
+
+strategy_thresholds:
+  min_probability_of_profit: 0.65
+  min_expected_value: 0.0
+  min_profit_factor_backtest: 1.2
+  max_strategy_drawdown: 0.20
+
+risk:
+  max_var_percent: 1.0
+  max_cvar_percent: 1.5
+  stress_test_required: true

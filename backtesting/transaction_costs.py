@@ -23,6 +23,33 @@ class TransactionCostModel:
         variable_cost = notional * (self.exchange_fee_percent + self.tax_percent + self.slippage_percent) / 100.0
         return variable_cost + self.brokerage_per_order * max(1, orders)
 
+    def estimate_round_trip(
+        self,
+        *,
+        entry_price: float,
+        exit_price: float,
+        quantity: int,
+        lot_size: int = 1,
+    ) -> dict[str, float]:
+        """Return a transparent round-trip cost breakdown from traded turnover."""
+
+        contracts = max(int(quantity), 0) * max(int(lot_size), 1)
+        entry_turnover = abs(float(entry_price)) * contracts
+        exit_turnover = abs(float(exit_price)) * contracts
+        total_turnover = entry_turnover + exit_turnover
+        brokerage = self.brokerage_per_order * 2
+        statutory_charges = total_turnover * (self.exchange_fee_percent + self.tax_percent) / 100.0
+        slippage_cost = total_turnover * self.slippage_percent / 100.0
+        return {
+            "entry_turnover": entry_turnover,
+            "exit_turnover": exit_turnover,
+            "total_turnover": total_turnover,
+            "brokerage": brokerage,
+            "statutory_charges": statutory_charges,
+            "slippage_cost": slippage_cost,
+            "total_transaction_cost": brokerage + statutory_charges + slippage_cost,
+        }
+
     def apply_slippage(self, *, price: float, side: OrderSide, is_entry: bool = True) -> float:
         """Apply directional slippage to a simulated fill price."""
 

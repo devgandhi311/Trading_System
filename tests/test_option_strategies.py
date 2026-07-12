@@ -8,6 +8,7 @@ from models import OptionChainSnapshot, OptionContract, OrderSide, PredictionRes
 from strategies import (
     CreditSpreadStrategy,
     DebitSpreadStrategy,
+    ExpectedMoveCreditSpreadStrategy,
     IronCondorStrategy,
     LongGammaStrategy,
     ShortStrangleStrategy,
@@ -18,6 +19,7 @@ def _chain() -> OptionChainSnapshot:
     expiry = date.today() + timedelta(days=10)
     contracts = []
     for strike, call_price, put_price in (
+        (25700.0, 340.0, 5.0),
         (25800.0, 260.0, 40.0),
         (25900.0, 180.0, 70.0),
         (26000.0, 110.0, 110.0),
@@ -73,6 +75,7 @@ def _prediction(regime: RegimeType = RegimeType.TRENDING) -> PredictionResult:
         bearish_probability=0.18,
         sideways_probability=0.2,
         expected_move_percent=1.2,
+        expected_return_percent=0.528,
         trade_allowed=True,
         reason="test prediction",
     )
@@ -110,6 +113,26 @@ def test_credit_spread_builds_bull_put_spread() -> None:
     assert plan.legs[1].side == OrderSide.BUY
     assert plan.metadata["variant"] == "bull_put"
     assert plan.metadata["target_profit"] == plan.metadata["max_profit"] * 0.5
+
+
+def test_expected_move_credit_spread_uses_probability_and_defined_risk() -> None:
+    plan = ExpectedMoveCreditSpreadStrategy().build_plan(
+        _prediction(RegimeType.TRENDING),
+        _chain(),
+        lot_size=75,
+        max_lots=1,
+        liquidity_score=0.8,
+    )
+
+    assert plan.strategy_type == StrategyType.EXPECTED_MOVE_CREDIT_SPREAD
+    assert len(plan.legs) == 2
+    assert plan.legs[0].side == OrderSide.SELL
+    assert plan.legs[1].side == OrderSide.BUY
+    assert plan.metadata["valid"] is True
+    assert plan.metadata["expected_value"] >= 0
+    assert plan.metadata["probability_of_profit"] >= 0.68
+    assert plan.metadata["max_loss"] > 0
+    assert plan.metadata["spread_width"] <= 500
 
 
 def test_debit_spread_builds_bull_call_spread() -> None:

@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .pytest_tmp/
+test_tmp/
 .mypy_cache/
 .ruff_cache/
 
@@ -27,6 +28,9 @@ data/model_data/
 reports/backtests/
 reports/model_reports/
 reports/risk_reports/
+!reports/risk_reports/
+reports/risk_reports/*
+!reports/risk_reports/backtest_v2_correctness_fix_report.md
 *.log
 
 # Local notebooks and OS/editor files

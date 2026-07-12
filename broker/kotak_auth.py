@@ -216,7 +216,8 @@ class KotakAuth:
             from dotenv import load_dotenv
         except ImportError as exc:
             raise BrokerError("python-dotenv is required to load Kotak .env credentials") from exc
-        load_dotenv(self.env_file, override=False)
+        explicit_env_file = self.env_file != Path(".env")
+        load_dotenv(self.env_file, override=explicit_env_file)
 
     def _build_session(self, response: MappingResponse, user_id: str) -> KotakSession:
         access_token = response.get("access_token")

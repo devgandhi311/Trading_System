@@ -48,12 +48,26 @@ class NewsScheduler:
         if not force and not due:
             return self.latest_event_risk
         articles = self.fetcher.fetch_all()
-        if not articles and self.config.risk_rules.get("fail_safe_block_on_news_api_error", False):
+        raw_articles = tuple(articles)
+        if not raw_articles and self.config.risk_rules.get("fail_safe_block_on_news_api_error", False):
             self.latest_event_risk = EventRiskResult(1.0, "EXTREME", False, 0.0, 30, "News API failed; fail-safe block enabled.", ())
             return self.latest_event_risk
-        self.latest_articles = self.cleaner.clean(articles)
+        if not raw_articles and self.fetcher.last_error:
+            LOGGER.warning("News refresh returned no articles", extra={"reason": self.fetcher.last_error})
+        cleaned_articles = self.cleaner.clean(raw_articles)
+        self.latest_articles = cleaned_articles or raw_articles
         self.latest_sentiment = self.sentiment.analyze(self.latest_articles)
         self.latest_event_risk = self.detector.detect(self.latest_articles, self.latest_sentiment, current_market_regime)
+        if not raw_articles and self.fetcher.last_error:
+            self.latest_event_risk = EventRiskResult(
+                self.latest_event_risk.event_risk_score,
+                self.latest_event_risk.event_risk_level,
+                self.latest_event_risk.trade_allowed,
+                self.latest_event_risk.position_size_multiplier,
+                self.latest_event_risk.no_trade_minutes,
+                self.fetcher.last_error,
+                self.latest_event_risk.top_risk_articles,
+            )
         self.last_fetch_at = now_ist()
         LOGGER.info("News refresh completed", extra={"articles": len(self.latest_articles), "risk": self.latest_event_risk.event_risk_level})
         return self.latest_event_risk

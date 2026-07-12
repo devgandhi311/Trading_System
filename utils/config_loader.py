@@ -13,6 +13,7 @@ import yaml
 
 from models import Mode
 from utils.exceptions import ConfigError
+from utils.env_loader import load_project_env
 
 LOGGER = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ class StrategyConfig:
     allowed_regimes: tuple[str, ...]
     lot_size: dict[str, int]
     max_lots_per_trade: int
+    expected_move_credit_spread: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -128,6 +130,7 @@ class ConfigLoader:
         self.project_root = Path(project_root or Path.cwd()).resolve()
         self.config_dir = self._resolve_path(config_dir)
         self.env_file = self._resolve_path(env_file)
+        load_project_env(self.env_file)
         self._raw_configs: dict[str, dict[str, Any]] = {}
         self._config: AppConfig | None = None
         self._secrets: dict[str, str] | None = None
@@ -300,6 +303,7 @@ class ConfigLoader:
             allowed_regimes=self._required_str_tuple(data, "allowed_regimes"),
             lot_size=self._required_int_map(data, "lot_size"),
             max_lots_per_trade=self._required_positive_int(data, "max_lots_per_trade"),
+            expected_move_credit_spread=dict(data.get("expected_move_credit_spread", {})),
         )
 
     def _parse_broker(self, data: Mapping[str, Any]) -> BrokerConfig:

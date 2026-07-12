@@ -134,6 +134,14 @@ Generated readiness tree, excluding `.git`, virtual environments, caches, byteco
 |   |-- risk_reports/
 |   |-- trade_logs/
 |   `-- trade_report.py
+|-- scripts/
+|   |-- check_data_files.py
+|   |-- check_data_loader.py
+|   |-- check_env.py
+|   |-- check_finnhub.py
+|   |-- check_news_integration.py
+|   |-- check_regime_distribution.py
+|   `-- project_health_check.py
 |-- risk/
 |   |-- __init__.py
 |   |-- daily_loss_guard.py
@@ -187,6 +195,7 @@ Generated readiness tree, excluding `.git`, virtual environments, caches, byteco
 `-- utils/
     |-- __init__.py
     |-- config_loader.py
+    |-- env_loader.py
     |-- exceptions.py
     |-- file_utils.py
     |-- logger.py

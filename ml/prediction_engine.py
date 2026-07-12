@@ -34,6 +34,10 @@ class PredictionEngine:
         self.model_registry = model_registry or ModelRegistry(config_loader=self.config_loader)
         self.explainability = explainability_engine or ExplainabilityEngine()
         self.models = dict(models or {})
+        self._last_prediction_sources: dict[str, str] = {}
+        self._prediction_count = 0
+        self._fallback_prediction_count = 0
+        self._model_prediction_count = 0
 
     def predict(
         self,
@@ -53,6 +57,7 @@ class PredictionEngine:
         underlying_symbol = underlying or self._underlying(latest_features, current_regime, option_chain_snapshot)
         spot = self._spot_price(latest_features, option_chain_snapshot)
 
+        self._last_prediction_sources = {}
         bullish_probability, bearish_probability, sideways_probability = self._direction_probabilities(latest_features)
         expected_move_percent = self._expected_move_percent(latest_features, option_chain_snapshot)
         expected_range_low = spot * (1.0 - expected_move_percent / 100.0) if spot else None
@@ -73,6 +78,11 @@ class PredictionEngine:
             confidence = clamp(confidence + news_score * 0.05, 0.0, 1.0)
         if getattr(news_event_risk, "event_risk_level", "").upper() in {"HIGH", "EXTREME"}:
             confidence = clamp(confidence - 0.2, 0.0, 1.0)
+        expected_return_percent = self._expected_return_percent(
+            bullish_probability,
+            bearish_probability,
+            expected_move_percent,
+        )
         recommended_strategy = self._recommended_strategy(
             latest_features=latest_features,
             regime_name=regime_name,
@@ -110,13 +120,32 @@ class PredictionEngine:
             iv_percentile=iv_percentile,
         )
 
-        LOGGER.info(
+        prediction_source = self._prediction_source(latest_features)
+        model_name, model_version = self._model_metadata(prediction_source)
+        features_used_count = self._features_used_count(latest_features)
+        expected_expiry_distribution = _expected_expiry_distribution(
+            spot,
+            expected_return_percent,
+            expected_move_percent,
+        )
+        expected_move_points = spot * expected_move_percent / 100.0 if spot else None
+        expected_expiry_price = (
+            expected_expiry_distribution.get("mean")
+            if expected_expiry_distribution is not None
+            else None
+        )
+        distribution_confidence = _as_float(latest_features.get("distribution_confidence"))
+        if distribution_confidence is None and expected_expiry_distribution is not None:
+            distribution_confidence = confidence
+        self._record_prediction(prediction_source)
+        LOGGER.debug(
             "Prediction generated",
             extra={
                 "underlying": underlying_symbol,
                 "regime": regime_name,
                 "confidence": confidence,
                 "trade_allowed": trade_allowed,
+                "prediction_source": prediction_source,
             },
         )
         return PredictionResult(
@@ -128,16 +157,19 @@ class PredictionEngine:
             confidence_score=confidence,
             horizon_minutes=375,
             regime=regime,
-            expected_return_percent=self._expected_return_percent(
-                bullish_probability,
-                bearish_probability,
-                expected_move_percent,
-            ),
+            expected_return_percent=expected_return_percent,
             expected_volatility_percent=expected_move_percent,
+            prediction_source=prediction_source,
+            model_name=model_name,
+            model_version=model_version,
+            features_used_count=features_used_count,
             bullish_probability=bullish_probability,
             bearish_probability=bearish_probability,
             sideways_probability=sideways_probability,
             expected_move_percent=expected_move_percent,
+            expected_move_points=expected_move_points,
+            expected_expiry_price=expected_expiry_price,
+            distribution_confidence=distribution_confidence,
             expected_range_low=expected_range_low,
             expected_range_high=expected_range_high,
             volatility_state=volatility_state,
@@ -148,7 +180,16 @@ class PredictionEngine:
             metadata={
                 "explainability": explanation.as_dict(),
                 "option_chain_expiry": str(option_chain_snapshot.expiry) if option_chain_snapshot else None,
-                "source": "model_or_feature_heuristic",
+                "source": prediction_source,
+                "prediction_source": prediction_source,
+                "model_name": model_name,
+                "model_version": model_version,
+                "features_used_count": features_used_count,
+                "expected_expiry_distribution": expected_expiry_distribution,
+                "expected_move_points": expected_move_points,
+                "expected_expiry_price": expected_expiry_price,
+                "distribution_confidence": distribution_confidence,
+                "prediction_sources": dict(self._last_prediction_sources),
                 "news_sentiment_score": news_score,
                 "event_risk_level": getattr(news_event_risk, "event_risk_level", None),
                 "event_risk_score": getattr(news_event_risk, "event_risk_score", None),
@@ -160,7 +201,11 @@ class PredictionEngine:
         if model is not None:
             probabilities = _predict_probabilities(model, features)
             if probabilities:
+                self._last_prediction_sources["direction"] = "trained model"
                 return _normalize_three(probabilities)
+            self._last_prediction_sources["direction"] = "fallback model"
+        else:
+            self._last_prediction_sources["direction"] = "fallback model"
 
         return_value = _first_float(features, "daily_return", "log_return", "intraday_return", default=0.0)
         trend_score = _first_float(features, "trend_score", "rolling_mean_return", default=return_value)
@@ -181,7 +226,11 @@ class PredictionEngine:
         if model is not None:
             prediction = _predict_scalar(model, features)
             if prediction is not None:
+                self._last_prediction_sources["volatility"] = "trained model"
                 return clamp(abs(prediction), 0.05, 20.0)
+            self._last_prediction_sources["volatility"] = "fallback model"
+        else:
+            self._last_prediction_sources["volatility"] = "fallback model"
         explicit = _first_float(
             features,
             "expected_move_from_iv",
@@ -206,7 +255,11 @@ class PredictionEngine:
         if model is not None:
             probabilities = _predict_probabilities(model, features)
             if probabilities:
+                self._last_prediction_sources["signal"] = "trained model"
                 return clamp(probabilities[-1], 0.0, 1.0)
+            self._last_prediction_sources["signal"] = "fallback model"
+        else:
+            self._last_prediction_sources["signal"] = "fallback model"
         failed_breakout = _first_float(features, "failed_breakout_detected", "failed_breakout_strength", default=0.0)
         range_compression = _first_float(features, "range_compression", default=0.0)
         liquidity_sweep = max(
@@ -254,8 +307,25 @@ class PredictionEngine:
         if confidence < self.config.strategy.min_confidence_score:
             return None
         allowed = {item for item in self.config.strategy.allowed_strategies}
+        event_risk_level = str(latest_features.get("event_risk_level") or "").upper()
+        iv_percentile = _first_float(latest_features, "iv_percentile", "volatility_percentile", default=50.0)
+        expected_move_credit_allowed = "expected_move_credit_spread" in allowed
         if sideways_probability >= max(bullish_probability, bearish_probability) and "mean_reversion" in allowed:
+            if (
+                expected_move_credit_allowed
+                and event_risk_level not in {"HIGH", "EXTREME"}
+                and iv_percentile >= 55.0
+                and expected_move_percent > 0
+            ):
+                return StrategyType.EXPECTED_MOVE_CREDIT_SPREAD
             return StrategyType.MEAN_REVERSION
+        if (
+            expected_move_credit_allowed
+            and event_risk_level not in {"HIGH", "EXTREME"}
+            and iv_percentile >= 55.0
+            and expected_move_percent >= 0.5
+        ):
+            return StrategyType.EXPECTED_MOVE_CREDIT_SPREAD
         if volatility_state == "expanding" and "volatility_scalping" in allowed:
             return StrategyType.VOLATILITY_SCALPING
         if expected_move_percent >= 0.6 and "momentum_breakout" in allowed:
@@ -347,6 +417,76 @@ class PredictionEngine:
     def _expected_return_percent(bullish: float, bearish: float, expected_move_percent: float) -> float:
         return (bullish - bearish) * expected_move_percent
 
+    def _prediction_source(self, features: Mapping[str, Any]) -> str:
+        """Summarize whether prediction used trained models or deterministic fallbacks."""
+
+        source_hint = str(features.get("prediction_source") or features.get("data_source") or "").upper()
+        if source_hint in {"SAMPLE", "SAMPLE_BASELINE"}:
+            return "SAMPLE_BASELINE"
+        if any(_is_mock_model(model) for model in self.models.values()):
+            return "MOCK"
+        if any(source == "trained model" for source in self._last_prediction_sources.values()):
+            return "TRAINED_MODEL"
+        return "FALLBACK_RULE_BASED"
+
+    def _model_metadata(self, prediction_source: str) -> tuple[str | None, str | None]:
+        """Return model name/version when a trained or mock model is used."""
+
+        if prediction_source not in {"TRAINED_MODEL", "MOCK"}:
+            return None, None
+        trained_components = [name for name, source in self._last_prediction_sources.items() if source == "trained model"]
+        model_names = trained_components or list(self.models.keys())
+        model_name = ",".join(model_names) if model_names else None
+        return model_name, self._model_version(model_name)
+
+    def _model_version(self, model_name: str | None) -> str | None:
+        if not model_name:
+            return None
+        try:
+            entries = self.model_registry.list_models()
+        except Exception:
+            return None
+        names = set(model_name.split(","))
+        matches = [entry for entry in entries if entry.model_name in names]
+        if not matches:
+            return None
+        latest = matches[-1]
+        return str(latest.metadata.get("version") or latest.created_at)
+
+    @staticmethod
+    def _features_used_count(features: Mapping[str, Any]) -> int:
+        """Count numeric/non-empty feature values made available to prediction."""
+
+        return sum(1 for value in features.values() if _as_float(value) is not None)
+
+    def reset_summary(self) -> None:
+        """Reset prediction logging counters."""
+
+        self._prediction_count = 0
+        self._fallback_prediction_count = 0
+        self._model_prediction_count = 0
+
+    def log_summary(self) -> None:
+        """Log aggregate prediction counts at INFO level."""
+
+        if self._prediction_count <= 0:
+            return
+        LOGGER.info(
+            "Prediction summary",
+            extra={
+                "predictions_generated_count": self._prediction_count,
+                "fallback_predictions_count": self._fallback_prediction_count,
+                "model_predictions_count": self._model_prediction_count,
+            },
+        )
+
+    def _record_prediction(self, prediction_source: str) -> None:
+        self._prediction_count += 1
+        if prediction_source == "TRAINED_MODEL":
+            self._model_prediction_count += 1
+        else:
+            self._fallback_prediction_count += 1
+
 
 def _predict_probabilities(model: Any, features: Mapping[str, Any]) -> tuple[float, ...] | None:
     try:
@@ -389,3 +529,21 @@ def _as_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _expected_expiry_distribution(
+    spot: float | None,
+    expected_return_percent: float,
+    expected_move_percent: float,
+) -> dict[str, float] | None:
+    if spot is None or spot <= 0:
+        return None
+    return {
+        "mean": spot * (1.0 + expected_return_percent / 100.0),
+        "stdev": max(spot * abs(expected_move_percent) / 100.0, spot * 0.001),
+    }
+
+
+def _is_mock_model(model: Any) -> bool:
+    name = f"{type(model).__module__}.{type(model).__name__}".lower()
+    return "mock" in name or "fake" in name

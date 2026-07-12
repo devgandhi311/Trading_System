@@ -31,6 +31,13 @@ class CacheWithArticle:
         raise AssertionError("cache should not be written when keys are missing")
 
 
+class MissingKeyProvider:
+    api_key = None
+
+    def fetch_market_news(self):
+        raise AssertionError("provider should not be called when keys are missing")
+
+
 def test_news_fetcher_uses_backup_provider() -> None:
     fetcher = NewsFetcher(providers={"finnhub": FailingProvider(), "alpha_vantage": WorkingProvider(), "marketaux": WorkingProvider()})
 
@@ -41,7 +48,8 @@ def test_news_fetcher_uses_backup_provider() -> None:
 
 
 def test_news_fetcher_ignores_cache_when_api_keys_missing() -> None:
-    fetcher = NewsFetcher(cache=CacheWithArticle())
+    providers = {"finnhub": MissingKeyProvider(), "alpha_vantage": MissingKeyProvider(), "marketaux": MissingKeyProvider()}
+    fetcher = NewsFetcher(providers=providers, cache=CacheWithArticle())
 
     articles = fetcher.fetch_all()
 

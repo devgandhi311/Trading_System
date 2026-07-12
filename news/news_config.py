@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from utils.exceptions import ConfigError
+from utils.env_loader import load_project_env
 from utils.time_utils import now_ist
 
 
@@ -78,6 +79,7 @@ class NewsConfigLoader:
     def __init__(self, path: str | Path = "config/news_config.yaml") -> None:
         """Create loader."""
 
+        load_project_env()
         self.path = Path(path)
         self._config: NewsConfig | None = None
 

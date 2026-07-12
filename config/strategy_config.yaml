@@ -4,6 +4,7 @@ allowed_strategies:
   - volatility_scalping
   - iron_condor
   - credit_spread
+  - expected_move_credit_spread
   - debit_spread
   - long_gamma
 default_expiry_type: WEEKLY
@@ -19,3 +20,40 @@ lot_size:
   FINNIFTY: 65
   MIDCPNIFTY: 140
 max_lots_per_trade: 2
+expected_move_credit_spread:
+  min_probability_otm: 0.68
+  min_reward_risk: 0.20
+  max_spread_width: 500
+  max_bid_ask_spread_percent: 5.0
+  confidence_interval_z: 1.0
+  expected_shortfall_tail_percent: 5.0
+  min_iv_percentile: 35.0
+strategy_v2:
+  enabled: true
+  default_selector: StrategySelectorV2
+  allow_no_trade: true
+  expected_move_credit_spread:
+    enabled: true
+    min_probability_otm: 0.80
+    min_expected_value: 0.0
+    max_spread_width: 300
+    min_credit_percent_of_width: 0.20
+  expected_move_iron_condor:
+    enabled: true
+    min_probability_between_short_strikes: 0.70
+    min_credit_percent_of_width: 0.15
+    max_wing_width: 300
+  broken_wing_butterfly:
+    enabled: true
+    min_expected_value: 0.0
+    max_net_debit: 5000
+  iv_mean_reversion:
+    enabled: true
+    min_iv_minus_forecast_vol: 0.05
+    defined_risk_only: true
+  volatility_expansion:
+    enabled: true
+    max_iv_percentile: 70
+    min_forecast_vol_expansion: 0.10
+  calendar_diagonal:
+    enabled: false

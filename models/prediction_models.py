@@ -44,13 +44,18 @@ class PredictionResult:
     regime: RegimeType
     expected_return_percent: float | None = None
     expected_volatility_percent: float | None = None
+    prediction_source: str = "FALLBACK_RULE_BASED"
     model_name: str | None = None
     model_version: str | None = None
+    features_used_count: int = 0
     underlying: str | None = None
     bullish_probability: float = 0.0
     bearish_probability: float = 0.0
     sideways_probability: float = 0.0
     expected_move_percent: float = 0.0
+    expected_move_points: float | None = None
+    expected_expiry_price: float | None = None
+    distribution_confidence: float | None = None
     expected_range_low: float | None = None
     expected_range_high: float | None = None
     volatility_state: str = "unknown"

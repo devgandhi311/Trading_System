@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import date
 import logging
 from typing import Any, Mapping
 
 from models import OptionChainSnapshot, PredictionResult, StrategyLeg, StrategyPlan, StrategyType
 from strategies.base_strategy import BaseStrategy
+from strategies.expected_move_credit_spread import ExpectedMoveCreditSpreadStrategy
 from utils.config_loader import ConfigLoader
 from utils.time_utils import now_ist
 
@@ -99,7 +99,15 @@ class StrategySelector:
             except ValueError:
                 return None
         if prediction.sideways_probability >= max(prediction.bullish_probability, prediction.bearish_probability):
+            if StrategyType.EXPECTED_MOVE_CREDIT_SPREAD in self.strategies:
+                return StrategyType.EXPECTED_MOVE_CREDIT_SPREAD
             return StrategyType.MEAN_REVERSION
+        if (
+            _as_float(features.get("iv_percentile") or 0.0) >= 55.0
+            and prediction.expected_move_percent > 0
+            and StrategyType.EXPECTED_MOVE_CREDIT_SPREAD in self.strategies
+        ):
+            return StrategyType.EXPECTED_MOVE_CREDIT_SPREAD
         if prediction.volatility_state == "expanding" or _as_float(features.get("iv_percentile") or 0.0) >= 70.0:
             return StrategyType.VOLATILITY_SCALPING
         if max(prediction.bullish_probability, prediction.bearish_probability) >= 0.45:
@@ -131,6 +139,14 @@ class StrategySelector:
             return False, "Option expiry is already past."
         if strategy_type == StrategyType.VOLATILITY_SCALPING and iv_percentile is not None and iv_percentile < 45.0:
             return False, "IV percentile is too low for volatility scalping."
+        if strategy_type == StrategyType.EXPECTED_MOVE_CREDIT_SPREAD:
+            params = self.config.strategy.expected_move_credit_spread
+            min_iv = _as_float(params.get("min_iv_percentile"))
+            if min_iv is not None and iv_percentile is not None and iv_percentile < min_iv:
+                return False, "IV percentile is too low for expected-move credit spread."
+            news_risk = str(risk_context.get("event_risk_level") or prediction.metadata.get("event_risk_level") or "").upper()
+            if news_risk in {"HIGH", "EXTREME"}:
+                return False, f"News event risk {news_risk} blocks expected-move credit spread."
         if strategy_type == StrategyType.MEAN_REVERSION and iv_percentile is not None and iv_percentile > 85.0:
             return False, "IV percentile is too high for mean reversion."
         if prediction.breakout_failure_probability > 0.65 and strategy_type == StrategyType.MOMENTUM_BREAKOUT:
@@ -154,6 +170,7 @@ class StrategySelector:
     def _default_strategies(self) -> dict[StrategyType, BaseStrategy]:
         allowed_regimes = tuple(self.config.strategy.allowed_regimes)
         required_confidence = self.config.strategy.min_confidence_score
+        expected_move_params = self.config.strategy.expected_move_credit_spread
         return {
             StrategyType.MOMENTUM_BREAKOUT: BaseStrategy(
                 name="Momentum Breakout",
@@ -175,6 +192,21 @@ class StrategySelector:
                 allowed_regimes=allowed_regimes,
                 required_confidence=required_confidence,
             ),
+            StrategyType.EXPECTED_MOVE_CREDIT_SPREAD: ExpectedMoveCreditSpreadStrategy(
+                allowed_regimes=allowed_regimes,
+                required_confidence=required_confidence,
+                min_probability_otm=_config_float(expected_move_params, "min_probability_otm", 0.68),
+                min_reward_risk=_config_float(expected_move_params, "min_reward_risk", 0.20),
+                max_spread_width=_config_float(expected_move_params, "max_spread_width", 500.0),
+                max_bid_ask_spread_percent=_config_float(expected_move_params, "max_bid_ask_spread_percent", 5.0),
+                confidence_interval_z=_config_float(expected_move_params, "confidence_interval_z", 1.0),
+                expected_shortfall_tail_percent=_config_float(
+                    expected_move_params,
+                    "expected_shortfall_tail_percent",
+                    5.0,
+                ),
+                min_iv_percentile=_config_float(expected_move_params, "min_iv_percentile", 35.0),
+            ),
         }
 
     @staticmethod
@@ -189,7 +221,7 @@ class StrategySelector:
             return override
         if snapshot is None:
             return 7
-        return (snapshot.expiry - date.today()).days
+        return max(0, (snapshot.expiry - snapshot.timestamp.date()).days)
 
 
 def _as_float(value: Any) -> float | None:
@@ -197,3 +229,8 @@ def _as_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _config_float(config: Mapping[str, Any], key: str, default: float) -> float:
+    value = _as_float(config.get(key))
+    return default if value is None else value

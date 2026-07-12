@@ -122,6 +122,11 @@ class RiskManager:
             )
         checks["news_event_risk"] = True
 
+        ev_check = self._expected_value_check(plan)
+        checks["positive_expected_value"] = ev_check is None
+        if ev_check is not None:
+            return self._reject(ev_check, checks=checks, warnings=warnings, timestamp=evaluated_at)
+
         trade_loss = self.trade_loss_guard.check(plan)
         checks["strategy_max_loss_defined"] = plan.max_loss is not None and plan.max_loss > 0
         checks["per_trade_max_loss"] = trade_loss.approved
@@ -270,6 +275,16 @@ class RiskManager:
         if isinstance(regime, RegimeType):
             return False
         return "event" in str(regime).lower()
+
+    @staticmethod
+    def _expected_value_check(plan: StrategyPlan) -> str | None:
+        expected_value = _optional_float(plan.metadata.get("expected_value"))
+        if expected_value is not None and expected_value < 0:
+            return "Strategy expected value is negative."
+        probability = _optional_float(plan.metadata.get("probability_of_profit"))
+        if probability is not None and not 0.0 <= probability <= 1.0:
+            return "Strategy probability of profit is invalid."
+        return None
 
 
 def _optional_float(value: Any) -> float | None:

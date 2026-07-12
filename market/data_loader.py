@@ -41,7 +41,7 @@ class DataLoader:
         "high": {"high", "highprice", "high_price", "h"},
         "low": {"low", "lowprice", "low_price", "l"},
         "close": {"close", "closeprice", "close_price", "last", "ltp", "c"},
-        "volume": {"volume", "vol", "tradedqty", "traded_quantity", "qty"},
+        "volume": {"volume", "vol", "tradedqty", "traded_quantity", "qty", "sharestraded", "shares_traded"},
     }
     SUPPORTED_SUFFIXES = {".csv", ".xlsx", ".xls", ".parquet"}
 

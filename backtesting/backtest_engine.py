@@ -15,7 +15,7 @@ from backtesting.walk_forward import WalkForwardSplitter, run_walk_forward_valid
 from features.feature_pipeline import FeaturePipeline
 from market.data_loader import DataLoader
 from ml.prediction_engine import PredictionEngine
-from models import Mode, OrderSide, StrategyType
+from models import Mode, OrderSide, PredictionResult, StrategyType
 from regime.regime_detector import RegimeDetector
 from utils.config_loader import ConfigLoader
 from utils.exceptions import DataValidationError
@@ -43,7 +43,9 @@ class BacktestConfig:
     target_percent: float = 1.5
     max_holding_bars: int = 5
     rolling_window: int = 20
+    regime_lookback_bars: int = 60
     use_ml_prediction: bool = True
+    run_walk_forward: bool = True
     dataset_name: str = "backtest"
 
 
@@ -91,10 +93,14 @@ class BacktestEngine:
             rolling_window=active_config.rolling_window,
             cache=False,
         ).features
+        if active_config.use_ml_prediction and hasattr(self.prediction_engine, "reset_summary"):
+            self.prediction_engine.reset_summary()
         trades = self._simulate(features, active_config)
+        if active_config.use_ml_prediction and hasattr(self.prediction_engine, "log_summary"):
+            self.prediction_engine.log_summary()
         equity_curve = self._equity_curve(trades, features, initial_capital=active_config.initial_capital)
         metrics = self.metrics.calculate(trades, equity_curve, initial_capital=active_config.initial_capital)
-        walk_forward = self.walk_forward_validate(features, active_config)
+        walk_forward = self.walk_forward_validate(features, active_config) if active_config.run_walk_forward else pd.DataFrame()
         report_path = (
             self.report_writer.save(
                 trades=trades,
@@ -142,12 +148,28 @@ class BacktestEngine:
             if direction == "flat":
                 index += 1
                 continue
-            regime = self.regime_detector.detect(features.iloc[: index + 1], symbol="NIFTY")
-            prediction = self.prediction_engine.predict(current.to_dict(), regime, timestamp=pd.to_datetime(current["date"]).to_pydatetime()) if config.use_ml_prediction else None
+            regime_start = max(0, index - config.regime_lookback_bars + 1)
+            regime = self.regime_detector.detect(features.iloc[regime_start : index + 1], symbol="NIFTY")
+            prediction = (
+                self.prediction_engine.predict(
+                    current.to_dict(),
+                    regime,
+                    timestamp=pd.to_datetime(current["date"]).to_pydatetime(),
+                )
+                if config.use_ml_prediction
+                else None
+            )
             if prediction is not None and not prediction.trade_allowed:
                 index += 1
                 continue
-            trade = self._simulate_trade(features, index, direction, regime.regime_name or regime.regime.value, config)
+            trade = self._simulate_trade(
+                features,
+                index,
+                direction,
+                regime.regime_name or regime.regime.value,
+                config,
+                prediction=prediction,
+            )
             trades.append(trade)
             index = int(trade["exit_index"]) + 1
         return pd.DataFrame(trades)
@@ -159,6 +181,7 @@ class BacktestEngine:
         direction: str,
         regime_name: str,
         config: BacktestConfig,
+        prediction: PredictionResult | None = None,
     ) -> dict[str, Any]:
         entry_bar = features.iloc[entry_index]
         entry_side = OrderSide.BUY if direction == "long" else OrderSide.SELL
@@ -215,6 +238,7 @@ class BacktestEngine:
             "net_pnl": net_pnl,
             "exit_reason": exit_reason,
             "option_payoff_approximation": signed_points * config.quantity,
+            **self._prediction_report_fields(config, prediction, entry_bar),
         }
 
     @staticmethod
@@ -271,4 +295,37 @@ class BacktestEngine:
             "net_pnl": 0.0,
             "exit_reason": "limit_not_filled",
             "option_payoff_approximation": 0.0,
+            "prediction_source": "",
+            "model_name": "",
+            "model_version": "",
+            "features_used_count": 0,
         }
+
+    @staticmethod
+    def _prediction_report_fields(
+        config: BacktestConfig,
+        prediction: PredictionResult | None,
+        row: pd.Series,
+    ) -> dict[str, Any]:
+        if prediction is not None:
+            return {
+                "prediction_source": prediction.prediction_source,
+                "model_name": prediction.model_name or "",
+                "model_version": prediction.model_version or "",
+                "features_used_count": prediction.features_used_count,
+            }
+        source = "SAMPLE_BASELINE" if "SAMPLE" in config.dataset_name.upper() else "FALLBACK_RULE_BASED"
+        return {
+            "prediction_source": source,
+            "model_name": "",
+            "model_version": "",
+            "features_used_count": sum(1 for value in row.to_dict().values() if _is_numeric(value)),
+        }
+
+
+def _is_numeric(value: Any) -> bool:
+    try:
+        float(value)
+        return True
+    except (TypeError, ValueError):
+        return False

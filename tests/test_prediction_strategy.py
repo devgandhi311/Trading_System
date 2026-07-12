@@ -163,6 +163,7 @@ def test_strategy_selector_returns_valid_plan_for_allowed_prediction() -> None:
         StrategyType.MOMENTUM_BREAKOUT,
         StrategyType.VOLATILITY_SCALPING,
         StrategyType.MEAN_REVERSION,
+        StrategyType.EXPECTED_MOVE_CREDIT_SPREAD,
     }
     assert plan.legs
     assert plan.metadata["advisory_only"] is True

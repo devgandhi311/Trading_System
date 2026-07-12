@@ -46,32 +46,64 @@ class NewsFetcher:
         cache_key = "all_news"
         if use_cache and self.config.cache_enabled:
             cached = self.cache.get_articles(cache_key)
-            if cached is not None:
+            if cached is not None and self._cache_matches_configured_providers(cached):
+                self.last_error = None
                 return cached
-        articles: list[NewsArticle] = []
+            if cached is not None:
+                LOGGER.warning("Ignoring news cache with non-configured provider articles")
+        provider_errors: list[str] = []
         for provider_name in self._provider_order():
             provider = self.providers.get(provider_name)
             if provider is None:
                 continue
-            try:
-                articles.extend(provider.fetch_market_news())
-                for symbol in self.config.symbols:
-                    articles.extend(provider.fetch_company_news(symbol))
-                articles.extend(provider.fetch_economic_calendar())
-                if articles:
-                    result = tuple(articles)
-                    if self.config.cache_enabled:
-                        self.cache.set_articles(cache_key, result)
-                    self.last_error = None
-                    return result
+            provider_articles, errors = self._fetch_provider_articles(provider_name, provider)
+            provider_errors.extend(errors)
+            if provider_articles:
+                result = tuple(provider_articles)
+                if self.config.cache_enabled:
+                    self.cache.set_articles(cache_key, result)
+                self.last_error = None
+                return result
+            if errors:
+                self.last_error = "; ".join(errors)
+            else:
+                self.last_error = f"{provider_name}: No articles returned"
                 LOGGER.warning("News provider returned empty response", extra={"provider": provider_name})
-            except BrokerError as exc:
-                self.last_error = str(exc)
-                LOGGER.warning("News provider failed", extra={"provider": provider_name, "error": type(exc).__name__})
+        if provider_errors:
+            self.last_error = "; ".join(provider_errors)
         return ()
+
+    def _fetch_provider_articles(self, provider_name: str, provider: object) -> tuple[list[NewsArticle], list[str]]:
+        """Fetch all supported provider endpoints without discarding partial success."""
+
+        articles: list[NewsArticle] = []
+        errors: list[str] = []
+        calls = [("market_news", lambda: provider.fetch_market_news())]
+        calls.extend((f"company_news:{symbol}", lambda symbol=symbol: provider.fetch_company_news(symbol)) for symbol in self.config.symbols)
+        calls.append(("economic_calendar", lambda: provider.fetch_economic_calendar()))
+        for endpoint_name, call in calls:
+            try:
+                articles.extend(call())
+            except BrokerError as exc:
+                message = f"{provider_name}.{endpoint_name}: {exc}"
+                errors.append(message)
+                LOGGER.warning(
+                    "News provider endpoint failed",
+                    extra={"provider": provider_name, "endpoint": endpoint_name, "error": str(exc)},
+                )
+            except AttributeError:
+                continue
+        return articles, errors
 
     def _provider_order(self) -> tuple[str, ...]:
         return (self.config.primary_provider, *self.config.backup_providers)
+
+    def _cache_matches_configured_providers(self, articles: tuple[NewsArticle, ...]) -> bool:
+        """Return true when cached articles came from configured real providers."""
+
+        configured = set(self._provider_order())
+        providers = {article.provider for article in articles if article.provider}
+        return not providers or bool(providers.intersection(configured))
 
     def _has_configured_provider_credentials(self) -> bool:
         """Return whether at least one configured provider can authenticate.

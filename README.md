@@ -21,6 +21,7 @@ Trading options and leveraged instruments can cause rapid financial loss. This s
 - `models/` - shared enums and dataclasses used across the system.
 - `news/` - financial news providers, cleaning, sentiment, event-risk detection, caching, and reports.
 - `pricing/` - option pricing and analytics.
+- `quant/` - research engines for expiry distributions, volatility studies, regime analytics, optimization, stress testing, and attribution.
 - `regime/` - market regime detection.
 - `reports/` - generated trade, risk, and performance reports.
 - `risk/` - risk checks and position controls.
@@ -68,6 +69,25 @@ Run a sample backtest and write an Excel report:
 python run_backtest.py --sample --rows 500 --report-dir reports/backtests
 ```
 
+Run a real-data backtest. This uses `data/raw/nse_30_years/` when supported files exist:
+
+```powershell
+python run_backtest.py --report-dir reports/backtests
+```
+
+Run the V2 research strategy backtest stack:
+
+```powershell
+python run_backtest_v2.py --report-dir reports/backtests
+```
+
+Run quant research reports:
+
+```powershell
+python -m quant.optimization.walk_forward_strategy_eval
+python -m quant.attribution.performance_attribution
+```
+
 Run the PAPER smoke workflow and write dashboard state files:
 
 ```powershell
@@ -87,6 +107,18 @@ python run_live.py
 ```
 
 The LIVE preflight does not place orders. With the default config it is expected to block.
+
+Run lightweight diagnostics:
+
+```powershell
+python scripts/check_env.py
+python scripts/check_finnhub.py
+python scripts/check_data_files.py
+python scripts/check_data_loader.py
+python scripts/check_news_integration.py
+python scripts/check_regime_distribution.py
+python scripts/project_health_check.py
+```
 
 ## Configuration
 

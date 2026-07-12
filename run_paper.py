@@ -75,6 +75,63 @@ def main(argv: list[str] | None = None) -> int:
             "reason": news_risk.reason,
         },
     )
+    _write_json(
+        state_dir / "strategy_v2.json",
+        {
+            "selected_strategy": "NO_TRADE",
+            "position_size": {"quantity": 0, "risk_amount": 0.0, "reason": "PAPER smoke run only."},
+            "explanation": "Strategy V2 state generated for dashboard smoke workflow; no orders placed.",
+            "timestamp": now_ist().isoformat(),
+        },
+    )
+    _write_json(
+        state_dir / "expiry_distribution.json",
+        {
+            "underlying": "NIFTY",
+            "spot": spot,
+            "expected_expiry_price": spot,
+            "lower_bound_68": spot * 0.99,
+            "upper_bound_68": spot * 1.01,
+            "lower_bound_95": spot * 0.98,
+            "upper_bound_95": spot * 1.02,
+            "tail_risk_score": 0.0,
+        },
+    )
+    _write_json(
+        state_dir / "vol_forecast.json",
+        {
+            "forecast_vol": 0.0,
+            "forecast_vol_percent": 0.0,
+            "volatility_state": "paper_mock",
+            "confidence": 0.0,
+            "model_used": "paper_smoke",
+        },
+    )
+    _write_json(
+        state_dir / "strategy_candidates.json",
+        {
+            "candidates": [],
+            "rejection_reasons": ["PAPER smoke run only; strategy research not executed."],
+        },
+    )
+    _write_json(
+        state_dir / "stress_test.json",
+        {
+            "pass_fail": "NOT_RUN",
+            "worst_case_loss": 0.0,
+            "probability_of_loss": 0.0,
+            "explanation": "Stress test not run during PAPER smoke workflow.",
+        },
+    )
+    _write_json(
+        state_dir / "performance_attribution.json",
+        {
+            "net_pnl": 0.0,
+            "cost_drag": 0.0,
+            "gross_to_net_decay": 0.0,
+            "status": "No trades in PAPER smoke workflow.",
+        },
+    )
     _write_csv(state_dir / "active_orders.csv", "order_id,symbol,status\n")
     _write_csv(state_dir / "open_positions.csv", "symbol,quantity,average_price,last_price,unrealized_pnl\n")
     LOGGER.info("PAPER smoke workflow completed", extra={"spot": spot})

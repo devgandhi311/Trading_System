@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,8 @@ from sklearn.metrics import accuracy_score, classification_report, mean_absolute
 from ml.dataset_builder import DatasetBuilder, WalkForwardSplit
 from ml.model_registry import ModelRegistry, ModelRegistryEntry
 from utils.file_utils import ensure_parent_dir
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -124,6 +127,12 @@ def _train_walk_forward(
     rows: list[dict[str, Any]] = []
     fitted_models: dict[str, Any] = {}
     for model_key, model in models.items():
+        if classification and model_key == "xgboost" and not pd.api.types.is_numeric_dtype(data[target]):
+            LOGGER.info(
+                "Skipping optional XGBoost classifier for non-numeric target",
+                extra={"target": target},
+            )
+            continue
         fold_scores: list[float] = []
         for split in splits:
             train = data.iloc[split.train_start : split.train_end]
@@ -136,7 +145,17 @@ def _train_walk_forward(
             y_test = test[target]
             if classification and y_train.nunique() < 2:
                 continue
-            model.fit(x_train, y_train)
+            try:
+                model.fit(x_train, y_train)
+            except Exception:
+                if model_key in {"xgboost", "lightgbm"}:
+                    LOGGER.warning(
+                        "Skipping optional model fold after fit failure",
+                        extra={"model": model_key, "target": target, "fold": split.fold},
+                        exc_info=True,
+                    )
+                    continue
+                raise
             predictions = model.predict(x_test)
             if classification:
                 score = accuracy_score(y_test, predictions)

@@ -65,6 +65,12 @@ def dashboard_state() -> dict[str, Any]:
     trades = load_table(trade_file) if trade_file else pd.DataFrame()
     kill_switch = load_json(STATE_DIR / "kill_switch.json", {"active": False, "reason": ""})
     news = load_json(STATE_DIR / "news.json", {})
+    strategy_v2 = load_json(STATE_DIR / "strategy_v2.json", {})
+    expiry_distribution = load_json(STATE_DIR / "expiry_distribution.json", {})
+    vol_forecast = load_json(STATE_DIR / "vol_forecast.json", {})
+    strategy_candidates = load_json(STATE_DIR / "strategy_candidates.json", {})
+    stress_test = load_json(STATE_DIR / "stress_test.json", {})
+    performance_attribution = load_json(STATE_DIR / "performance_attribution.json", {})
     daily_pnl = _daily_pnl(trades)
     return {
         "prediction": prediction,
@@ -76,6 +82,12 @@ def dashboard_state() -> dict[str, Any]:
         "trades": trades,
         "kill_switch": kill_switch,
         "news": news,
+        "strategy_v2": strategy_v2,
+        "expiry_distribution": expiry_distribution,
+        "vol_forecast": vol_forecast,
+        "strategy_candidates": strategy_candidates,
+        "stress_test": stress_test,
+        "performance_attribution": performance_attribution,
         "daily_pnl": daily_pnl,
     }
 
@@ -94,6 +106,12 @@ def run() -> None:
     risk = state["risk"]
     kill_switch = state["kill_switch"]
     news = state["news"]
+    strategy_v2 = state["strategy_v2"]
+    expiry_distribution = state["expiry_distribution"]
+    vol_forecast = state["vol_forecast"]
+    strategy_candidates = state["strategy_candidates"]
+    stress_test = state["stress_test"]
+    performance_attribution = state["performance_attribution"]
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Current Regime", regime.get("regime_name", regime.get("regime", "unknown")))
@@ -119,10 +137,33 @@ def run() -> None:
             "bearish_probability": prediction.get("bearish_probability"),
             "sideways_probability": prediction.get("sideways_probability"),
             "expected_move_percent": prediction.get("expected_move_percent"),
+            "expected_value": prediction.get("expected_value"),
+            "probability_of_profit": prediction.get("probability_of_profit"),
+            "expected_shortfall": prediction.get("expected_shortfall"),
             "confidence_score": prediction.get("confidence_score"),
             "recommended_strategy_type": prediction.get("recommended_strategy_type"),
             "trade_allowed": prediction.get("trade_allowed"),
             "reason": prediction.get("reason"),
+        }
+    )
+
+    st.subheader("Strategy V2")
+    st.json(
+        {
+            "expected_expiry_range": {
+                "expected_expiry_price": expiry_distribution.get("expected_expiry_price"),
+                "lower_bound_68": expiry_distribution.get("lower_bound_68"),
+                "upper_bound_68": expiry_distribution.get("upper_bound_68"),
+                "lower_bound_95": expiry_distribution.get("lower_bound_95"),
+                "upper_bound_95": expiry_distribution.get("upper_bound_95"),
+            },
+            "volatility_forecast": vol_forecast,
+            "selected_strategy": strategy_v2.get("selected_strategy", "NO_TRADE"),
+            "position_size_recommendation": strategy_v2.get("position_size", {}),
+            "candidate_rejection_reasons": strategy_candidates.get("rejection_reasons", []),
+            "news_risk": news.get("event_risk_level", "LOW"),
+            "stress_test_result": stress_test,
+            "performance_attribution": performance_attribution,
         }
     )
 
