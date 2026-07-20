@@ -92,6 +92,9 @@ class OptionContract:
     open_interest: int | None = None
     implied_volatility: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    instrument_token: str | None = None
+    quote_timestamp: datetime | None = None
+    available_quantity: int | None = None
 
 
 @dataclass(frozen=True)
@@ -104,3 +107,44 @@ class OptionChainSnapshot:
     expiry: date
     contracts: tuple[OptionContract, ...]
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RequiredOptionLeg:
+    """Exact option contract required by a candidate strategy."""
+
+    expiry: date
+    strike: float
+    option_type: str
+
+
+@dataclass(frozen=True)
+class PaperMarketSnapshot:
+    """Complete point-in-time input to strict PAPER market validation."""
+
+    snapshot_id: str
+    underlying: str
+    timestamp: datetime
+    spot_price: float
+    spot_timestamp: datetime
+    spot_instrument_token: str
+    option_chain: OptionChainSnapshot
+    futures_price: float | None = None
+    futures_timestamp: datetime | None = None
+    futures_instrument_token: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MarketSnapshotValidationResult:
+    """Fail-closed outcome of validating one PAPER market snapshot."""
+
+    valid: bool
+    entry_allowed: bool
+    exit_allowed: bool
+    blocking_reasons: tuple[str, ...]
+    warnings: tuple[str, ...]
+    snapshot_timestamp: datetime
+    oldest_quote_age: float
+    validated_instruments: tuple[str, ...]
+    rejected_instruments: tuple[str, ...]

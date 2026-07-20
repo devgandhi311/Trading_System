@@ -15,7 +15,12 @@ from market.data_loader import DataLoader
 from market.data_store import DataStore
 from market.option_chain import OptionChain
 from models import Mode
-from models.market_models import OptionChainSnapshot
+from models.market_models import (
+    MarketSnapshotValidationResult,
+    OptionChainSnapshot,
+    PaperMarketSnapshot,
+    RequiredOptionLeg,
+)
 from utils.config_loader import ConfigLoader
 from utils.exceptions import DataValidationError
 from utils.file_utils import ensure_parent_dir
@@ -23,6 +28,7 @@ from utils.time_utils import now_ist
 
 if TYPE_CHECKING:
     from features.feature_pipeline import FeaturePipeline, FeaturePipelineResult
+    from runtime.market_snapshot_validator import MarketSnapshotValidator
 
 
 class MarketDataManager:
@@ -39,6 +45,7 @@ class MarketDataManager:
         broker_client: KotakClient | None = None,
         option_chain: OptionChain | None = None,
         feature_pipeline: "FeaturePipeline | None" = None,
+        snapshot_validator: "MarketSnapshotValidator | None" = None,
     ) -> None:
         """Create a market data manager using configured defaults."""
 
@@ -55,6 +62,11 @@ class MarketDataManager:
 
             feature_pipeline = FeaturePipeline(mode=self.mode, data_store=self.data_store)
         self.feature_pipeline = feature_pipeline
+        if snapshot_validator is None:
+            from runtime.market_snapshot_validator import MarketSnapshotValidator
+
+            snapshot_validator = MarketSnapshotValidator()
+        self.snapshot_validator = snapshot_validator
         self.historical_data: pd.DataFrame | None = None
         self.latest_option_chain: OptionChainSnapshot | None = None
 
@@ -139,6 +151,27 @@ class MarketDataManager:
         file_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
         return file_path
 
+    def validate_paper_snapshot(
+        self,
+        snapshot: PaperMarketSnapshot,
+        *,
+        required_legs: tuple[RequiredOptionLeg, ...] = (),
+        previous_prices: dict[str, float] | None = None,
+        current_time=None,
+        emergency_exit: bool = False,
+    ) -> MarketSnapshotValidationResult:
+        """Validate supplied PAPER data without fetching or substituting fallback data."""
+
+        if self.mode != Mode.PAPER:
+            raise DataValidationError("Strict PAPER snapshot validation requires PAPER mode")
+        return self.snapshot_validator.validate(
+            snapshot,
+            required_legs=required_legs,
+            previous_prices=previous_prices,
+            current_time=current_time,
+            emergency_exit=emergency_exit,
+        )
+
     def generate_features(
         self,
         dataframe: pd.DataFrame | None = None,
@@ -161,4 +194,7 @@ class MarketDataManager:
         data["expiry"] = snapshot.expiry.isoformat()
         for contract in data["contracts"]:
             contract["expiry"] = contract["expiry"].isoformat() if hasattr(contract["expiry"], "isoformat") else contract["expiry"]
+            quote_timestamp = contract.get("quote_timestamp")
+            if hasattr(quote_timestamp, "isoformat"):
+                contract["quote_timestamp"] = quote_timestamp.isoformat()
         return data

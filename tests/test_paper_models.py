@@ -17,6 +17,7 @@ from models import (
     PaperOrder,
     PaperPortfolioState,
     PaperPosition,
+    ReconciliationOutcome,
     ReconciliationResult,
     StrategyLeg,
     StrategyType,
@@ -45,7 +46,17 @@ def _runtime_models() -> tuple[PaperFill, PaperOrder, PaperPosition, PaperPortfo
         5000.0, unrealized_pnl=150.0, transaction_costs=12.0, positions=(position,),
     )
     health = SystemHealthState("health-1", now, True, True, True, False)
-    reconciliation = ReconciliationResult("recon-1", now, True, 1, 1, 1)
+    reconciliation = ReconciliationResult(
+        reconciliation_id="recon-1",
+        session_id="session-1",
+        timestamp=now,
+        outcome=ReconciliationOutcome.CLEAN,
+        entry_blocked=False,
+        exits_allowed=True,
+        matched_orders=1,
+        matched_fills=1,
+        matched_positions=1,
+    )
     return fill, order, position, portfolio, health, reconciliation
 
 

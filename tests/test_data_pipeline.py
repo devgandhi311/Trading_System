@@ -58,7 +58,8 @@ def test_data_loader_validates_removes_duplicates_and_saves_report(tmp_path: Pat
     assert report.manifest.missing_value_counts["Date"] == 1
     assert report.manifest.timezone == "Asia/Kolkata"
     assert report.manifest.loader_version == DataLoader.LOADER_VERSION
-    assert "Dataset_Manifest" in pd.ExcelFile(report.report_path).sheet_names
+    with pd.ExcelFile(report.report_path) as workbook:
+        assert "Dataset_Manifest" in workbook.sheet_names
     discovered = {str(path.resolve()) for path in (raw_dir / "nifty.csv", raw_dir / "nifty_extra.xlsx")}
     assert set(report.manifest.source_file_paths) == discovered
     assert set(report.manifest.source_file_hashes) == discovered

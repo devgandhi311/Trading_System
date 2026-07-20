@@ -59,7 +59,9 @@ Updated 2026-07-12 from the actual repository. Generated runtime data, logs, cac
 |-- risk/                   (__init__.py, daily_loss_guard.py, dynamic_hedge.py, exposure_limits.py,
 |                            kill_switch.py, position_sizing.py, risk_manager.py, slippage_model.py,
 |                            trade_loss_guard.py)
-|-- runtime/                (__init__.py, live_safety_gate.py)
+|-- runtime/                (__init__.py, live_safety_gate.py, market_snapshot_validator.py)
+|-- storage/                (__init__.py, database.py, models.py, repositories.py,
+|                            schema_version.py)
 |-- scripts/                (environment/data/news/look-ahead/health diagnostics and profiling scripts)
 |-- strategies/             (__init__.py, base/research bases, payoff utilities, V1/V2 selectors,
 |                            credit/debit/iron-condor/long-gamma/short-strangle and V2 strategy modules)

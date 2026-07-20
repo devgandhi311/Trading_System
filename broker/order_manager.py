@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, is_dataclass, replace
 import logging
+from threading import RLock
 from typing import Any, Protocol
 from uuid import uuid4
 
 from models import Mode, OrderSide, OrderStatus, OrderType
-from models.order_models import OrderRequest, OrderResponse, TradeState
+from alerts.alert_manager import redact
+from models.order_models import (
+    OrderIntentRecord,
+    OrderIntentStatus,
+    OrderRequest,
+    OrderResponse,
+    TradeState,
+)
 from utils.config_loader import ConfigLoader
 from utils.exceptions import BrokerError, OrderValidationError
 from utils.time_utils import now_ist
@@ -34,6 +42,9 @@ class OrderExecutionAdapter(Protocol):
     def cancel_order(self, order_id: str) -> dict[str, Any]:
         """Cancel an existing order and return broker response data."""
 
+    def find_order_by_idempotency_key(self, idempotency_key: str) -> dict[str, Any] | None:
+        """Return the matching broker order, or None when absence is confirmed."""
+
 
 class OrderManager:
     """Validate, log, simulate, or route broker-level order intents."""
@@ -53,6 +64,8 @@ class OrderManager:
         self.execution_adapter = execution_adapter
         self.orders: dict[str, OrderResponse] = {}
         self.positions: dict[str, TradeState] = {}
+        self.order_intents: dict[str, OrderIntentRecord] = {}
+        self._intent_lock = RLock()
         LOGGER.info("Order manager initialized", extra={"mode": self.mode.value})
 
     @property
@@ -71,14 +84,78 @@ class OrderManager:
         self._ensure_live_orders_allowed()
         if self.execution_adapter is None:
             raise BrokerError("Live order execution adapter is not configured")
-        try:
-            response = self.execution_adapter.place_order(order_request)
-        except Exception as exc:
-            LOGGER.error("Live place_order failed", extra={"symbol": order_request.symbol})
-            raise BrokerError("Live place_order failed") from exc
-        order_response = self._response_from_mapping(response, order_request)
-        self.orders[order_response.order_id] = order_response
-        return order_response
+        key = order_request.idempotency_key
+        with self._intent_lock:
+            existing = self.order_intents.get(key)
+            if existing and existing.status == OrderIntentStatus.CONFIRMED and existing.response:
+                return existing.response
+            if existing and existing.status in {
+                OrderIntentStatus.IN_FLIGHT,
+                OrderIntentStatus.UNKNOWN,
+                OrderIntentStatus.RECONCILIATION_REQUIRED,
+            }:
+                raise BrokerError(f"Order intent {key} requires reconciliation; automatic retry blocked")
+            attempts = (existing.attempts if existing else 0) + 1
+            self.order_intents[key] = OrderIntentRecord(key, OrderIntentStatus.IN_FLIGHT, attempts=attempts)
+            request = replace(
+                order_request,
+                metadata={**order_request.metadata, "idempotency_key": key},
+            )
+            try:
+                response = self.execution_adapter.place_order(request)
+                order_response = self._response_from_mapping(response, request)
+            except Exception as exc:
+                self.order_intents[key] = OrderIntentRecord(
+                    key,
+                    OrderIntentStatus.UNKNOWN,
+                    attempts=attempts,
+                    detail=type(exc).__name__,
+                )
+                LOGGER.error(
+                    "Live place_order outcome unknown; reconciliation required",
+                    extra={"symbol": order_request.symbol, "idempotency_key": key},
+                )
+                raise BrokerError("Live place_order outcome UNKNOWN; reconciliation required") from exc
+            self.orders[order_response.order_id] = order_response
+            self.order_intents[key] = OrderIntentRecord(
+                key, OrderIntentStatus.CONFIRMED, response=order_response, attempts=attempts
+            )
+            return order_response
+
+    def reconcile_order_intent(self, idempotency_key: str) -> OrderIntentRecord:
+        """Resolve an UNKNOWN intent against the broker before any retry."""
+
+        with self._intent_lock:
+            record = self.order_intents.get(idempotency_key)
+            if record is None:
+                raise BrokerError("Unknown idempotency key")
+            if record.status == OrderIntentStatus.CONFIRMED:
+                return record
+            if self.execution_adapter is None or not hasattr(
+                self.execution_adapter, "find_order_by_idempotency_key"
+            ):
+                blocked = replace(record, status=OrderIntentStatus.RECONCILIATION_REQUIRED)
+                self.order_intents[idempotency_key] = blocked
+                return blocked
+            try:
+                match = self.execution_adapter.find_order_by_idempotency_key(idempotency_key)
+            except Exception as exc:
+                blocked = replace(
+                    record,
+                    status=OrderIntentStatus.RECONCILIATION_REQUIRED,
+                    detail=type(exc).__name__,
+                )
+                self.order_intents[idempotency_key] = blocked
+                return blocked
+            if match is None:
+                retryable = replace(record, status=OrderIntentStatus.RETRY_ALLOWED, detail="confirmed_not_found")
+                self.order_intents[idempotency_key] = retryable
+                return retryable
+            response = self._response_from_mapping(match, None)
+            self.orders[response.order_id] = response
+            confirmed = replace(record, status=OrderIntentStatus.CONFIRMED, response=response, detail=None)
+            self.order_intents[idempotency_key] = confirmed
+            return confirmed
 
     def modify_order(
         self,
@@ -174,8 +251,15 @@ class OrderManager:
         return tuple(self.squareoff_position(position) for position in tuple(self.positions.values()))
 
     def _ensure_live_orders_allowed(self) -> None:
-        if self.mode != Mode.LIVE or not self.config.settings.live_trading_enabled:
-            raise BrokerError("LIVE orders require mode=LIVE and live_trading_enabled=true")
+        if (
+            self.mode != Mode.LIVE
+            or not self.config.settings.live_trading_enabled
+            or not self.config.settings.live_order_submission_enabled
+        ):
+            raise BrokerError(
+                "LIVE orders require mode=LIVE, live_trading_enabled=true, and "
+                "live_order_submission_enabled=true"
+            )
 
     def _validate_order_request(self, order_request: OrderRequest) -> None:
         if not isinstance(order_request, OrderRequest):
@@ -358,8 +442,7 @@ class OrderManager:
             data = dict(payload)
         else:
             data = {"value": str(payload)}
-        data.pop("metadata", None)
-        return data
+        return redact(data)
 
     @staticmethod
     def _optional_float(value: Any) -> float | None:

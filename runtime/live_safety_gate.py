@@ -8,6 +8,7 @@ from typing import Any
 from models import Mode
 from utils.exceptions import ExecutionError
 from utils.time_utils import now_ist
+from alerts.alert_manager import redact
 
 REQUIRED_CONDITIONS = ("preflight_passed", "reconciliation_passed", "kill_switch_inactive",
  "market_data_fresh", "news_risk_allowed", "risk_decision_approved", "order_validation_approved",
@@ -42,5 +43,7 @@ def validate_live_submission(*, mode: Mode, live_trading_enabled: bool,
         if ack.configuration_checksum != expected_checksum: failures.append("configuration_checksum")
     except Exception:
         ack = None; failures.append("manual_deployment_acknowledgement")
-    if failures: raise ExecutionError("Live submission blocked: " + ", ".join(failures))
+    if failures:
+        safe_failures = redact(failures)
+        raise ExecutionError("Live submission blocked: " + ", ".join(safe_failures))
     return ack

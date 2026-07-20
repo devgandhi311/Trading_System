@@ -1,4 +1,8 @@
-"""Position sizing helpers for risk-approved strategy plans."""
+"""Position sizing helpers for risk-approved strategy plans.
+
+Position sizing must use current equity from the authoritative
+PaperPortfolioService.
+"""
 
 from __future__ import annotations
 
@@ -20,18 +24,32 @@ class PositionSizingResult:
 
 
 class PositionSizer:
-    """Calculate allowed quantity from capital and strategy max loss."""
+    """Calculate allowed quantity from capital and strategy max loss.
 
-    def __init__(self, *, capital: float, max_loss_per_trade_percent: float) -> None:
+    Uses current equity which should come from the authoritative
+    PaperPortfolioService.
+    """
+
+    def __init__(self, *, capital: float, max_loss_per_trade_percent: float, max_loss_per_trade_absolute: float | None = None) -> None:
         """Create a sizer using account capital and per-trade risk percent."""
 
         self.capital = float(capital)
         self.max_loss_per_trade_percent = float(max_loss_per_trade_percent)
+        self.max_loss_per_trade_absolute = max_loss_per_trade_absolute
 
-    def size(self, plan: StrategyPlan, *, event_risk_level: str | None = None, position_size_multiplier: float | None = None) -> PositionSizingResult:
-        """Return allowed quantity and max risk amount for a plan."""
+    def size(self, plan: StrategyPlan, *, event_risk_level: str | None = None, position_size_multiplier: float | None = None, current_equity: float | None = None, reserved_risk: float = 0.0) -> PositionSizingResult:
+        """Return allowed quantity and max risk amount for a plan.
 
-        max_risk_amount = self.capital * self.max_loss_per_trade_percent / 100.0
+        Position sizing must use current equity.
+        """
+
+        equity = self.capital if current_equity is None else float(current_equity)
+        if equity <= 0:
+            return PositionSizingResult(0, 0.0, float(plan.max_loss or 0.0), False, "Current equity is zero or negative.")
+        gross_risk_budget = equity * self.max_loss_per_trade_percent / 100.0
+        if self.max_loss_per_trade_absolute is not None:
+            gross_risk_budget = min(gross_risk_budget, float(self.max_loss_per_trade_absolute))
+        max_risk_amount = max(0.0, gross_risk_budget - max(float(reserved_risk), 0.0))
         plan_risk = float(plan.max_loss or 0.0)
         if plan_risk <= 0:
             return PositionSizingResult(0, max_risk_amount, plan_risk, False, "Strategy max loss is not defined.")

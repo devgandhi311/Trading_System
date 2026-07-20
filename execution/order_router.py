@@ -17,6 +17,7 @@ from utils.time_utils import now_ist
 
 LOGGER = logging.getLogger(__name__)
 QuoteProvider = Callable[[str], Any]
+LiveSafetyApproval = Callable[[], object]
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class OrderRouter:
         order_validator: OrderValidator | None = None,
         config_loader: ConfigLoader | None = None,
         retry_handler: RetryHandler | None = None,
+        live_safety_approval: LiveSafetyApproval | None = None,
     ) -> None:
         """Create order router."""
 
@@ -45,6 +47,7 @@ class OrderRouter:
         self.order_manager = order_manager or OrderManager(config_loader=self.config_loader)
         self.order_validator = order_validator or OrderValidator(config_loader=self.config_loader)
         self.retry_handler = retry_handler or RetryHandler()
+        self.live_safety_approval = live_safety_approval
 
     def prepare_entry_basket(self, plan: StrategyPlan) -> OrderBasket:
         """Convert StrategyPlan legs into entry LIMIT order requests."""
@@ -72,6 +75,8 @@ class OrderRouter:
                 operation_name=f"place_order:{order.symbol}",
             )
             responses.append(response)
+            if response.status in {OrderStatus.FAILED}:
+                raise ExecutionError("Dependent basket legs blocked by unresolved prior order")
         return tuple(responses)
 
     def place_order(self, order_request: OrderRequest, quote_provider: QuoteProvider) -> OrderResponse:
@@ -103,8 +108,16 @@ class OrderRouter:
 
     def _ensure_live_allowed_if_needed(self) -> None:
         mode = self.config.settings.mode
-        if mode == Mode.LIVE and not self.config.settings.live_trading_enabled:
-            raise ExecutionError("LIVE orders require live_trading_enabled=true")
+        if mode != Mode.LIVE:
+            return
+        if not (
+            self.config.settings.live_trading_enabled
+            and self.config.settings.live_order_submission_enabled
+        ):
+            raise ExecutionError("LIVE order submission switches are not enabled")
+        if self.live_safety_approval is None:
+            raise ExecutionError("Live safety approval is required before routing")
+        self.live_safety_approval()
 
     def _order_from_leg(self, plan: StrategyPlan, leg: StrategyLeg) -> OrderRequest:
         if leg.order_type == OrderType.MARKET and not bool(leg.metadata.get("emergency_exit")):

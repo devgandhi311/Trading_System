@@ -13,13 +13,17 @@ LOGGER = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
+class RetryablePreSubmissionError(ExecutionError):
+    """Failure proven to have occurred before a broker submission call."""
+
+
 @dataclass(frozen=True)
 class RetryPolicy:
     """Retry policy for broker/execution calls."""
 
     attempts: int = 3
     backoff_seconds: float = 1.0
-    retry_exceptions: tuple[type[Exception], ...] = (Exception,)
+    retry_exceptions: tuple[type[Exception], ...] = (RetryablePreSubmissionError,)
 
 
 class RetryHandler(Generic[T]):

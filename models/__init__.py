@@ -16,14 +16,23 @@ from models.broker_models import (
     PositionSnapshot,
     QuoteSnapshot,
 )
-from models.market_models import MarketBar, OptionChainSnapshot, OptionContract
+from models.market_models import (
+    MarketBar,
+    MarketSnapshotValidationResult,
+    OptionChainSnapshot,
+    OptionContract,
+    PaperMarketSnapshot,
+    RequiredOptionLeg,
+)
 from models.order_models import OrderRequest, OrderResponse, TradeState
 from models.paper_models import (
+    DecisionContext,
     MarketSnapshot,
     PaperFill,
     PaperOrder,
     PaperPortfolioState,
     PaperPosition,
+    ReconciliationOutcome,
     ReconciliationResult,
     SystemHealthState,
     TradingCycleResult,
@@ -36,13 +45,16 @@ from models.strategy_models import StrategyLeg, StrategyPlan
 __all__ = [
     "BrokerProfile",
     "HoldingSnapshot",
+    "DecisionContext",
     "LatencyReport",
     "MarginSnapshot",
     "MarketBar",
     "MarketSnapshot",
+    "MarketSnapshotValidationResult",
     "Mode",
     "OptionChainSnapshot",
     "OptionContract",
+    "PaperMarketSnapshot",
     "OrderRequest",
     "OrderResponse",
     "OrderSide",
@@ -59,6 +71,7 @@ __all__ = [
     "RegimeResult",
     "RegimeType",
     "ReconciliationResult",
+    "RequiredOptionLeg",
     "RiskDecision",
     "StrategyLeg",
     "StrategyPlan",

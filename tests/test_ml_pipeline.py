@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -8,7 +9,11 @@ from ml.model_registry import ModelRegistry
 from ml.train_direction_model import train_direction_model
 from ml.train_regime_model import train_regime_model
 from ml.train_signal_model import train_signal_model
-from ml.train_volatility_model import train_volatility_model
+from ml.train_volatility_model import (
+    _optional_model_evidence,
+    _train_optional_arch,
+    train_volatility_model,
+)
 
 
 def _feature_dataset(rows: int = 80) -> pd.DataFrame:
@@ -66,7 +71,13 @@ def test_training_modules_save_reports_and_models(tmp_path: Path) -> None:
 
     direction = train_direction_model(dataset, registry=registry, train_window=30, test_window=10)
     signal = train_signal_model(dataset, registry=registry, train_window=30, test_window=10)
-    volatility = train_volatility_model(dataset, registry=registry, train_window=30, test_window=10)
+    volatility = train_volatility_model(
+        dataset,
+        registry=registry,
+        report_dir=tmp_path / "reports" / "volatility",
+        train_window=30,
+        test_window=10,
+    )
     regime = train_regime_model(dataset, registry=registry, train_window=30, test_window=10)
 
     assert direction.metrics_path.exists()
@@ -74,5 +85,86 @@ def test_training_modules_save_reports_and_models(tmp_path: Path) -> None:
     assert signal.metrics_path.exists()
     assert "volatility_expansion" in volatility
     assert "expected_range" in volatility
+    assert "optional_models_report" in volatility
+    assert Path(volatility["optional_models_report"]).exists()
     assert "hmm" in regime
     assert registry.list_models()
+
+
+def test_nonconverged_arch_model_is_not_persisted(monkeypatch) -> None:
+    import arch
+
+    class NonConvergedModel:
+        def fit(self, **_kwargs):
+            return SimpleNamespace(
+                convergence_flag=9,
+                optimization_result=SimpleNamespace(
+                    success=False,
+                    status=9,
+                    message="Iteration limit reached",
+                ),
+            )
+
+    class RejectSaveRegistry:
+        def save_model(self, *_args, **_kwargs):
+            raise AssertionError("A non-converged ARCH model must not be persisted")
+
+    monkeypatch.setattr(arch, "arch_model", lambda *_args, **_kwargs: NonConvergedModel())
+    dataset = pd.DataFrame({"target_next_day_return": [0.01, -0.01] * 15})
+    result = _train_optional_arch(dataset, registry=RejectSaveRegistry(), model_name="garch", vol="GARCH")
+
+    assert "did not converge" in result
+    assert "status=9" in result
+
+
+def test_optional_model_evidence_rejects_nonconvergence() -> None:
+    row = _optional_model_evidence(
+        "garch",
+        "GARCH",
+        "Skipped garch: optimization did not converge (flag=9, status=9)",
+    )
+
+    assert row["outcome"] == "skipped"
+    assert row["status"] == "rejected"
+    assert "did not converge" in row["reason"]
+    assert row["artifact_path"] == ""
+
+
+def test_optional_model_evidence_qualifies_saved_artifact(tmp_path: Path) -> None:
+    artifact = tmp_path / "models" / "garch.pkl"
+    row = _optional_model_evidence("garch", "GARCH", f"Saved garch: {artifact}")
+
+    assert row["outcome"] == "saved"
+    assert row["status"] == "qualified"
+    assert row["reason"] == ""
+    assert row["artifact_path"] == str(artifact)
+
+
+def test_optional_model_evidence_marks_neutral_skip_not_qualified() -> None:
+    unavailable = _optional_model_evidence("garch", "GARCH", "Skipped garch: arch package unavailable")
+    insufficient = _optional_model_evidence("egarch", "EGARCH", "Skipped egarch: insufficient observations")
+
+    assert unavailable["status"] == "not_qualified"
+    assert insufficient["status"] == "not_qualified"
+
+
+def test_optional_models_report_contains_qualification_rows(tmp_path: Path) -> None:
+    dataset = DatasetBuilder().create_targets(_feature_dataset(80))
+    registry = ModelRegistry(model_dir=tmp_path / "models", registry_path=tmp_path / "models" / "registry.json")
+    result = train_volatility_model(
+        dataset,
+        registry=registry,
+        report_dir=tmp_path / "reports",
+        train_window=30,
+        test_window=10,
+    )
+
+    report_path = Path(result["optional_models_report"])
+    assert report_path == tmp_path / "reports" / "volatility_optional_models.xlsx"
+    assert report_path.exists()
+    report = pd.read_excel(report_path, keep_default_na=False)
+    assert list(report.columns) == [
+        "model_name", "model_type", "outcome", "status", "reason", "artifact_path",
+    ]
+    assert report["model_name"].tolist() == ["garch", "egarch"]
+    assert set(report["status"]).issubset({"qualified", "rejected", "not_qualified"})

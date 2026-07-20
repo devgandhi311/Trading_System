@@ -54,6 +54,22 @@ def latest_file(directory: Path, pattern: str) -> Path | None:
 def dashboard_state() -> dict[str, Any]:
     """Load dashboard state from local files."""
 
+    authoritative = load_json(STATE_DIR / "dashboard_state.json", None)
+    if authoritative is not None:
+        return {
+            **authoritative,
+            "orders": pd.DataFrame(authoritative.get("orders", [])),
+            "positions": pd.DataFrame(authoritative.get("positions", [])),
+            "latency": pd.DataFrame(), "trades": pd.DataFrame(),
+            "daily_pnl": float((authoritative.get("risk") or {}).get("realized_pnl") or 0.0),
+            "kill_switch": load_json(STATE_DIR / "kill_switch.json", {}),
+            "strategy_v2": authoritative.get("strategy", {}),
+            "expiry_distribution": authoritative.get("expiry_distribution", {}),
+            "vol_forecast": authoritative.get("volatility", {}),
+            "strategy_candidates": {"available": False}, "stress_test": {"available": False},
+            "performance_attribution": authoritative.get("risk", {}),
+        }
+
     prediction = load_json(STATE_DIR / "prediction.json", {})
     regime = load_json(STATE_DIR / "regime.json", {})
     risk = load_json(STATE_DIR / "risk.json", {})

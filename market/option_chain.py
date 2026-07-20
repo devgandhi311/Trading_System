@@ -123,6 +123,7 @@ class OptionChain:
             {
                 **asdict(contract),
                 "expiry": contract.expiry.isoformat(),
+                "quote_timestamp": contract.quote_timestamp.isoformat() if contract.quote_timestamp else None,
                 "snapshot_underlying": snapshot.underlying,
                 "snapshot_time": snapshot.timestamp.isoformat(),
                 "spot_price": snapshot.spot_price,
@@ -158,6 +159,11 @@ class OptionChain:
             open_interest=self._optional_int(quote.get("open_interest") or quote.get("oi")),
             implied_volatility=self._optional_float(quote.get("implied_volatility") or quote.get("iv")),
             metadata={"token": record.token},
+            instrument_token=record.token,
+            quote_timestamp=quote.get("timestamp") or now_ist(),
+            available_quantity=self._optional_int(
+                quote.get("available_quantity") or quote.get("quantity") or quote.get("market_depth_quantity")
+            ),
         )
 
     def _validate_underlying(self, underlying: str) -> None:

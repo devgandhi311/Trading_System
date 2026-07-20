@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import date, datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from types import UnionType
 from typing import Any, Mapping, TypeVar, Union, get_args, get_origin, get_type_hints
 
 from models.common import Mode, OrderSide, OrderStatus, OrderType, StrategyType
-from models.market_models import OptionChainSnapshot
+from models.market_models import OptionChainSnapshot, PaperMarketSnapshot
+from models.prediction_models import PredictionResult, RegimeResult
 from models.strategy_models import StrategyLeg
 from utils.time_utils import ensure_ist
 
@@ -33,6 +34,40 @@ class JsonSerializable:
         hints = get_type_hints(cls)
         values = {item.name: _restore_value(hints[item.name], payload[item.name]) for item in fields(cls) if item.name in payload}
         return cls(**values)
+
+
+class SessionState(StrEnum):
+    """Durable session lifecycle states for the PAPER session scheduler.
+
+    NOT_STARTED     — No session exists for this trading date yet.
+    PREOPEN         — Before market open; pre-market checks run here.
+    OPEN            — Market is open but entry may not yet be allowed.
+    ENTRY_ALLOWED   — New entries, exits, and monitoring are permitted.
+    EXIT_ONLY       — Entry cutoff reached; only exits and monitoring allowed.
+    SQUAREOFF       — Force-squareoff window; positions being closed.
+    CLOSED          — Session complete; final equity persisted.
+    HOLIDAY         — Configured NSE holiday; no trading.
+    FAILED          — Session ended due to unrecoverable error.
+    RECOVERY_REQUIRED — Prior session requires resolution before new session.
+    """
+
+    NOT_STARTED = "NOT_STARTED"
+    PREOPEN = "PREOPEN"
+    OPEN = "OPEN"
+    ENTRY_ALLOWED = "ENTRY_ALLOWED"
+    EXIT_ONLY = "EXIT_ONLY"
+    SQUAREOFF = "SQUAREOFF"
+    CLOSED = "CLOSED"
+    HOLIDAY = "HOLIDAY"
+    FAILED = "FAILED"
+    RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
+
+
+# Session phases that allow exits
+EXIT_ALLOWING_PHASES = {SessionState.OPEN, SessionState.ENTRY_ALLOWED, SessionState.EXIT_ONLY, SessionState.SQUAREOFF}
+
+# Session phases that allow new entries
+ENTRY_ALLOWING_PHASES = {SessionState.ENTRY_ALLOWED}
 
 
 @dataclass(frozen=True)
@@ -81,6 +116,13 @@ class PaperOrder(JsonSerializable):
     filled_quantity: int = 0
     fills: tuple[PaperFill, ...] = ()
     rejection_reason: str | None = None
+    remaining_quantity: int | None = None
+    average_fill_price: float | None = None
+    entry_turnover: float = 0.0
+    transaction_costs: float = 0.0
+    cancellation_reason: str | None = None
+    lifecycle_state: str | None = None
+    modification_history: tuple[dict[str, Any], ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -91,6 +133,12 @@ class PaperOrder(JsonSerializable):
         _require_optional_positive(requested_price=self.requested_price, trigger_price=self.trigger_price, fill_price=self.fill_price)
         if not 0 <= self.filled_quantity <= self.quantity:
             raise ValueError("filled_quantity must be between zero and quantity")
+        if self.remaining_quantity is None:
+            object.__setattr__(self, "remaining_quantity", self.quantity - self.filled_quantity)
+        if self.remaining_quantity != self.quantity - self.filled_quantity:
+            raise ValueError("remaining_quantity must equal quantity minus filled_quantity")
+        _require_optional_positive(average_fill_price=self.average_fill_price)
+        _require_non_negative(entry_turnover=self.entry_turnover, transaction_costs=self.transaction_costs)
 
 
 @dataclass(frozen=True)
@@ -210,13 +258,72 @@ class SystemHealthState(JsonSerializable):
         _require_non_negative(consecutive_failures=self.consecutive_failures)
 
 
+class ReconciliationOutcome(StrEnum):
+    """Possible reconciliation outcomes."""
+
+    CLEAN = "CLEAN"
+    EVENTUAL_CONSISTENCY_PENDING = "EVENTUAL_CONSISTENCY_PENDING"
+    LOCAL_ORDER_MISSING = "LOCAL_ORDER_MISSING"
+    BROKER_ORDER_MISSING = "BROKER_ORDER_MISSING"
+    ORDER_STATE_MISMATCH = "ORDER_STATE_MISMATCH"
+    FILL_MISMATCH = "FILL_MISMATCH"
+    QUANTITY_MISMATCH = "QUANTITY_MISMATCH"
+    PRICE_MISMATCH = "PRICE_MISMATCH"
+    COST_MISMATCH = "COST_MISMATCH"
+    POSITION_MISMATCH = "POSITION_MISMATCH"
+    UNKNOWN_ORDER = "UNKNOWN_ORDER"
+    AMBIGUOUS = "AMBIGUOUS"
+    BROKER_UNAVAILABLE = "BROKER_UNAVAILABLE"
+
+
+ENTRY_BLOCKING_OUTCOMES = {
+    ReconciliationOutcome.UNKNOWN_ORDER,
+    ReconciliationOutcome.AMBIGUOUS,
+    ReconciliationOutcome.LOCAL_ORDER_MISSING,
+    ReconciliationOutcome.BROKER_ORDER_MISSING,
+    ReconciliationOutcome.ORDER_STATE_MISMATCH,
+    ReconciliationOutcome.FILL_MISMATCH,
+    ReconciliationOutcome.QUANTITY_MISMATCH,
+    ReconciliationOutcome.PRICE_MISMATCH,
+    ReconciliationOutcome.COST_MISMATCH,
+    ReconciliationOutcome.POSITION_MISMATCH,
+    ReconciliationOutcome.BROKER_UNAVAILABLE,
+}
+
+EXIT_ALLOWING_OUTCOMES = {
+    ReconciliationOutcome.CLEAN,
+    ReconciliationOutcome.EVENTUAL_CONSISTENCY_PENDING,
+    ReconciliationOutcome.UNKNOWN_ORDER,
+    ReconciliationOutcome.AMBIGUOUS,
+    ReconciliationOutcome.LOCAL_ORDER_MISSING,
+    ReconciliationOutcome.BROKER_ORDER_MISSING,
+    ReconciliationOutcome.ORDER_STATE_MISMATCH,
+    ReconciliationOutcome.FILL_MISMATCH,
+    ReconciliationOutcome.QUANTITY_MISMATCH,
+    ReconciliationOutcome.PRICE_MISMATCH,
+    ReconciliationOutcome.COST_MISMATCH,
+    ReconciliationOutcome.POSITION_MISMATCH,
+    ReconciliationOutcome.BROKER_UNAVAILABLE,
+}
+
+
 @dataclass(frozen=True)
 class ReconciliationResult(JsonSerializable):
     """Result of comparing persisted PAPER orders, fills, and positions."""
 
     reconciliation_id: str
+    session_id: str
     timestamp: datetime
-    reconciled: bool
+    outcome: ReconciliationOutcome
+    entry_blocked: bool = False
+    exits_allowed: bool = True
+    affected_order_ids: tuple[str, ...] = ()
+    affected_position_ids: tuple[str, ...] = ()
+    local_state: dict[str, Any] = field(default_factory=dict)
+    broker_state: dict[str, Any] = field(default_factory=dict)
+    mismatch_details: tuple[dict[str, Any], ...] = ()
+    reason: str = ""
+    valid_until: datetime | None = None
     matched_orders: int = 0
     matched_fills: int = 0
     matched_positions: int = 0
@@ -225,8 +332,14 @@ class ReconciliationResult(JsonSerializable):
     warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        _require_text(reconciliation_id=self.reconciliation_id)
+        _require_text(reconciliation_id=self.reconciliation_id, session_id=self.session_id)
         _normalize_timestamp(self, "timestamp")
+        if isinstance(self.outcome, str):
+            object.__setattr__(self, "outcome", ReconciliationOutcome(self.outcome))
+        if not isinstance(self.outcome, ReconciliationOutcome):
+            raise ValueError("outcome must be a ReconciliationOutcome")
+        if self.valid_until is not None:
+            _normalize_timestamp(self, "valid_until")
         _require_non_negative(matched_orders=self.matched_orders, matched_fills=self.matched_fills, matched_positions=self.matched_positions)
 
 
@@ -254,6 +367,74 @@ class TradingCycleResult(JsonSerializable):
         _normalize_timestamp(self, "completed_at")
         if self.completed_at < self.started_at:
             raise ValueError("completed_at cannot precede started_at")
+
+
+@dataclass(frozen=True)
+class DecisionContext(JsonSerializable):
+    """Advisory causal decision context for one PAPER decision cycle."""
+
+    decision_cycle_id: str
+    session_id: str
+    timestamp: datetime
+    market_snapshot_id: str
+    feature_snapshot_id: str | None = None
+    feature_timestamp: datetime | None = None
+    regime: str | None = None
+    regime_confidence: float = 0.0
+    regime_warnings: tuple[str, ...] = ()
+    prediction_probabilities: tuple[float, float, float] | None = None
+    prediction_confidence: float = 0.0
+    expected_return_percent: float | None = None
+    expected_range_low: float | None = None
+    expected_range_high: float | None = None
+    model_names: tuple[str, ...] = ()
+    model_versions: tuple[str, ...] = ()
+    volatility_forecast: float | None = None
+    volatility_model_requested: str | None = None
+    volatility_model_used: str | None = None
+    convergence_status: str | None = None
+    fallback_used: bool = False
+    fallback_reason: str | None = None
+    expected_expiry_price: float | None = None
+    expected_move: float | None = None
+    range_68: tuple[float, float] | None = None
+    range_95: tuple[float, float] | None = None
+    tail_risk_score: float | None = None
+    news_sentiment: float | None = None
+    event_risk_level: str | None = None
+    liquidity_score: float | None = None
+    entry_context_valid: bool = False
+    invalid_reason: str | None = None
+    warnings: tuple[str, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+    version: int = 1
+
+    def __post_init__(self) -> None:
+        _require_text(decision_cycle_id=self.decision_cycle_id, session_id=self.session_id, market_snapshot_id=self.market_snapshot_id)
+        _normalize_timestamp(self, "timestamp")
+        if self.feature_timestamp is not None:
+            _normalize_timestamp(self, "feature_timestamp")
+        if self.feature_timestamp is not None and self.feature_timestamp > self.timestamp:
+            raise ValueError("feature_timestamp cannot exceed timestamp")
+        if self.expected_range_low is not None and self.expected_range_high is not None:
+            if self.expected_range_low > self.expected_range_high:
+                raise ValueError("expected_range_low cannot exceed expected_range_high")
+        if self.range_68 is not None:
+            if not isinstance(self.range_68, tuple) or len(self.range_68) != 2:
+                raise ValueError("range_68 must be a tuple of two floats")
+            if self.range_68[0] > self.range_68[1]:
+                raise ValueError("range_68 lower bound cannot exceed upper bound")
+        if self.range_95 is not None:
+            if not isinstance(self.range_95, tuple) or len(self.range_95) != 2:
+                raise ValueError("range_95 must be a tuple of two floats")
+            if self.range_95[0] > self.range_95[1]:
+                raise ValueError("range_95 lower bound cannot exceed upper bound")
+        _require_non_negative(regime_confidence=self.regime_confidence, prediction_confidence=self.prediction_confidence, tail_risk_score=self.tail_risk_score or 0.0)
+        if self.liquidity_score is not None:
+            _require_non_negative(liquidity_score=self.liquidity_score)
+        if self.news_sentiment is not None:
+            if not -1.0 <= self.news_sentiment <= 1.0:
+                raise ValueError("news_sentiment must be between -1.0 and 1.0")
 
 
 def _json_value(value: Any) -> Any:

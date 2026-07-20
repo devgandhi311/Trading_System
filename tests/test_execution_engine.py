@@ -95,6 +95,7 @@ def _account(**overrides: float | int) -> dict[str, float | int]:
         "consecutive_losses": 0,
         "margin_used": 0.0,
         "available_margin": 100_000.0,
+        "initial_capital": 1_000_000,
     }
     account.update(overrides)
     return account
